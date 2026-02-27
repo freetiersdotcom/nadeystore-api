@@ -15,8 +15,25 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
 
   const token = authHeader.slice(7);
   const db = getDb(c.var.db);
-  const stripeSecretKey = c.env.STRIPE_SECRET_KEY || null;
-  const stripeWebhookSecret = c.env.STRIPE_WEBHOOK_SECRET || null;
+  
+  let stripeSecretKey = c.env.STRIPE_SECRET_KEY || null;
+  let stripeWebhookSecret = c.env.STRIPE_WEBHOOK_SECRET || null;
+
+  if (!stripeSecretKey) {
+    const db = getDb(c.var.db);
+    const [configRow] = await db.query<{ value: string }>(
+      `SELECT value FROM config WHERE key = 'stripe' LIMIT 1`
+    );
+    if (configRow) {
+      try {
+        const parsed = JSON.parse(configRow.value);
+        stripeSecretKey = parsed.secret_key || null;
+        stripeWebhookSecret = parsed.webhook_secret || null;
+      } catch {
+        // malformed config, leave as null
+      }
+    }
+  }
 
   const isOAuthToken = token.length === 64 && /^[a-f0-9]+$/.test(token);
   if (isOAuthToken) {
