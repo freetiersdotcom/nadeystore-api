@@ -82,7 +82,7 @@ export function Layout({
           </svg>
           {!collapsed && (
             <span className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-              merchant
+              Admin
             </span>
           )}
         </div>

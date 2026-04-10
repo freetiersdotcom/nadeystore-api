@@ -30,27 +30,86 @@ export const ErrorResponse = z.object({
 // VARIANT SCHEMAS
 // ============================================================
 
+export const ProductType = z.enum(['physical', 'digital']).openapi({
+  description: '"physical" ships as a physical good; "digital" is a downloadable asset delivered via secure link.',
+});
+
+// Extended variant response (replace VariantResponse in schemas.ts)
 export const VariantResponse = z.object({
   id: z.string().uuid(),
-  sku: z.string().openapi({ example: 'TEE-BLK-M' }),
-  title: z.string().openapi({ example: 'Black / Medium' }),
-  price_cents: z.number().int().openapi({ example: 2999 }),
+  sku: z.string().openapi({ example: 'EBOOK-PDF-V2' }),
+  title: z.string().openapi({ example: 'PDF Edition' }),
+  price_cents: z.number().int().openapi({ example: 1499 }),
   image_url: z.string().nullable().openapi({ example: 'https://example.com/image.jpg' }),
+  product_type: ProductType,
+  /** Only present for digital variants — the R2 object key */
+  digital_asset_key: z.string().nullable().openapi({
+    example: 'assets/ebook-v2.pdf',
+    description: 'R2 storage key for digital variants. Upload via POST /v1/catalog/products/:id/variants/:variantId/asset',
+  }),
 }).openapi('Variant');
 
+// Extended create variant body
 export const CreateVariantBody = z.object({
-  sku: z.string().min(1).openapi({ example: 'TEE-BLK-M' }),
-  title: z.string().min(1).openapi({ example: 'Black / Medium' }),
-  price_cents: z.number().int().min(0).openapi({ example: 2999 }),
+  sku: z.string().min(1).openapi({ example: 'EBOOK-PDF-V2' }),
+  title: z.string().min(1).openapi({ example: 'PDF Edition' }),
+  price_cents: z.number().int().min(0).openapi({ example: 1499 }),
   image_url: z.string().url().optional().openapi({ example: 'https://example.com/image.jpg' }),
+  product_type: ProductType.default('physical'),
+  weight_g: z.number().int().min(0).default(0).openapi({
+    example: 0,
+    description: 'Weight in grams. Use 0 for digital products.',
+  }),
 }).openapi('CreateVariant');
 
+// Extended update variant body
 export const UpdateVariantBody = z.object({
   sku: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   price_cents: z.number().int().min(0).optional(),
   image_url: z.string().url().nullable().optional(),
+  product_type: ProductType.optional(),
 }).openapi('UpdateVariant');
+
+// ============================================================
+// DOWNLOAD TOKEN SCHEMAS
+// ============================================================
+
+export const DownloadTokenResponse = z.object({
+  id: z.string().uuid(),
+  order_id: z.string().uuid(),
+  sku: z.string(),
+  expires_at: z.string().datetime(),
+  download_count: z.number().int(),
+  max_downloads: z.number().int(),
+  downloads_remaining: z.number().int(),
+}).openapi('DownloadToken');
+
+export const DownloadTokenListResponse = z.object({
+  items: z.array(DownloadTokenResponse),
+}).openapi('DownloadTokenList');
+
+// ============================================================
+// ASSET UPLOAD SCHEMAS
+// ============================================================
+
+export const AssetUploadResponse = z.object({
+  key: z.string().openapi({ example: 'assets/ebook-v2.pdf' }),
+  size_bytes: z.number().int(),
+  content_type: z.string(),
+}).openapi('AssetUpload');
+
+// ============================================================
+// SETUP EMAIL SCHEMAS (for reference in setup.ts)
+// ============================================================
+
+export const SetupEmailBody = z.object({
+  provider: z.enum(['resend', 'sendgrid', 'mailgun', 'postmark']),
+  api_key: z.string().min(1),
+  from_address: z.string().min(1).openapi({ example: 'Your Store <noreply@yourstore.com>' }),
+  mailgun_domain: z.string().optional(),
+  mailgun_region: z.enum(['us', 'eu']).optional(),
+}).openapi('SetupEmail');
 
 // ============================================================
 // PRODUCT SCHEMAS

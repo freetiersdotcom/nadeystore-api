@@ -310,7 +310,7 @@ const createVariant = createRoute({
 
 app.openapi(createVariant, async (c) => {
   const { id: productId } = c.req.valid('param');
-  const { sku, title, price_cents, image_url } = c.req.valid('json');
+  const { sku, title, price_cents, image_url, product_type, digital_asset_key } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const [product] = await db.query<any>(`SELECT * FROM products WHERE id = ?`, [productId]);
@@ -323,8 +323,8 @@ app.openapi(createVariant, async (c) => {
   const timestamp = now();
 
   await db.run(
-    `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, productId, sku, title, price_cents, 0, image_url || null, timestamp]
+    `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, image_url, product_type, digital_asset_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, productId, sku, title, price_cents, 0, image_url || null, product_type, digital_asset_key, timestamp]
   );
 
   await db.run(

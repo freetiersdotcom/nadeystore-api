@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { MIGRATIONS, DOWNLOAD_TOKENS_SCHEMA } from './migrations';
 
 export interface MerchantEnv {
   MERCHANT: DurableObjectNamespace<MerchantDO>;
@@ -335,6 +336,8 @@ CREATE INDEX IF NOT EXISTS idx_events_type_processed ON events(type, processed_a
 CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_status ON ucp_checkout_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_stripe ON ucp_checkout_sessions(stripe_session_id);
 CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_expires ON ucp_checkout_sessions(expires_at);
+
+${DOWNLOAD_TOKENS_SCHEMA}
 `;
 
 export class MerchantDO extends DurableObject<MerchantEnv> {
@@ -355,6 +358,19 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     for (const stmt of statements) {
       this.sql.exec(stmt);
     }
+	
+	// ALTER TABLE migrations (SQLite doesn't support IF NOT EXISTS here)
+    const migrations = MIGRATIONS.split(';')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+    for (const stmt of migrations) {
+      try {
+        this.sql.exec(stmt);
+      } catch {
+        // Column already exists — safe to ignore
+      }
+    }
+	
     this.initialized = true;
   }
 

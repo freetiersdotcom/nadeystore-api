@@ -13,6 +13,8 @@ import { images } from './routes/images';
 import { discounts } from './routes/discounts';
 import { oauth } from './routes/oauth';
 import { ucp } from './routes/ucp';
+import { downloads } from './routes/downloads';
+import { assetRoutes } from './routes/assets';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
 import { MerchantDO } from './do';
@@ -70,6 +72,12 @@ app.route('/v1/discounts', discounts);
 app.route('/oauth', oauth);
 app.route('', oauth);
 app.route('', ucp);
+
+// Mount downloads (public — no auth wrapper needed, token is the credential)
+app.route('/v1/downloads', downloads);
+
+// Mount asset upload under the catalog products path
+app.route('/v1/catalog/products', assetRoutes);
 
 app.doc('/openapi.json', {
   openapi: '3.0.0',

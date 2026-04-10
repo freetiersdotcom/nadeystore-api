@@ -4,6 +4,9 @@ import { getDb } from '../db';
 import { ApiError, uuid, now, generateOrderNumber, type HonoEnv } from '../types';
 import { dispatchWebhooks } from '../lib/webhooks';
 import { handleUCPStripeWebhook } from './ucp';
+import { getEmailProvider } from '../lib/email/index';
+import { renderOrderConfirmation } from '../lib/email/template';
+import { createDownloadTokens } from '../lib/downloads';
 
 // ============================================================
 // WEBHOOK ROUTES
@@ -49,11 +52,11 @@ webhooks.post('/stripe', async (c) => {
 
   if (event.type === 'checkout.session.completed') {
     const webhookSession = event.data.object as Stripe.Checkout.Session;
-    
+
     if (webhookSession.metadata?.ucp_checkout_session_id) {
       await handleUCPStripeWebhook(db, webhookSession.id, webhookSession);
     }
-    
+
     const cartId = webhookSession.metadata?.cart_id;
 
     if (cartId) {
@@ -62,7 +65,6 @@ webhooks.post('/stripe', async (c) => {
         const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
 
         // Retrieve full session from Stripe to get shipping_details
-        // (webhook payload sometimes doesn't include all fields)
         const session = await stripe.checkout.sessions.retrieve(webhookSession.id);
 
         // Handle discount
@@ -81,23 +83,15 @@ webhooks.post('/stripe', async (c) => {
             discountCode = discount.code;
             discountId = discount.id;
             discountAmountCents = cart.discount_amount_cents || 0;
-
-            // We don't increment again here to avoid double-counting
-            // The usage_count was reserved at checkout and is now being committed with the order
           }
         }
 
-        // Calculate subtotal from cart items (before discounts)
-        // session.amount_subtotal includes discounts as negative line items, so we calculate from original items
         const subtotalCents = items.reduce(
-          (sum, item) => sum + item.unit_price_cents * item.qty,
+          (sum: number, item: any) => sum + item.unit_price_cents * item.qty,
           0
         );
 
-        // Generate order number (timestamp-based to avoid race conditions)
         const orderNumber = generateOrderNumber();
-
-        // Extract customer details from full Stripe session
         const customerEmail = cart.customer_email;
         const shippingName =
           session.shipping_details?.name || session.customer_details?.name || null;
@@ -105,7 +99,7 @@ webhooks.post('/stripe', async (c) => {
           session.shipping_details?.phone || session.customer_details?.phone || null;
         const shippingAddress = session.shipping_details?.address || null;
 
-        // Upsert customer (create or update on email match)
+        // Upsert customer
         let customerId: string | null = null;
         const [existingCustomer] = await db.query<any>(
           `SELECT id, order_count, total_spent_cents FROM customers WHERE email = ?`,
@@ -113,7 +107,6 @@ webhooks.post('/stripe', async (c) => {
         );
 
         if (existingCustomer) {
-          // Update existing customer
           customerId = existingCustomer.id;
           await db.run(
             `UPDATE customers SET 
@@ -127,23 +120,15 @@ webhooks.post('/stripe', async (c) => {
             [shippingName, shippingPhone, session.amount_total ?? 0, now(), now(), customerId]
           );
         } else {
-          // Create new customer
           customerId = uuid();
           await db.run(
             `INSERT INTO customers (id, email, name, phone, order_count, total_spent_cents, last_order_at)
              VALUES (?, ?, ?, ?, 1, ?, ?)`,
-            [
-              customerId,
-              customerEmail,
-              shippingName,
-              shippingPhone,
-              session.amount_total ?? 0,
-              now(),
-            ]
+            [customerId, customerEmail, shippingName, shippingPhone, session.amount_total ?? 0, now()]
           );
         }
 
-        // Save shipping address to customer if provided
+        // Save shipping address
         if (shippingAddress && customerId) {
           const [existingAddress] = await db.query<any>(
             `SELECT id FROM customer_addresses WHERE customer_id = ? AND line1 = ? AND postal_code = ?`,
@@ -151,7 +136,6 @@ webhooks.post('/stripe', async (c) => {
           );
 
           if (!existingAddress) {
-            // Check if customer has any addresses
             const [addressCount] = await db.query<any>(
               `SELECT COUNT(*) as count FROM customer_addresses WHERE customer_id = ?`,
               [customerId]
@@ -162,23 +146,16 @@ webhooks.post('/stripe', async (c) => {
               `INSERT INTO customer_addresses (id, customer_id, is_default, name, line1, line2, city, state, postal_code, country, phone)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
-                uuid(),
-                customerId,
-                isDefault,
-                shippingName,
-                shippingAddress.line1,
-                shippingAddress.line2 || null,
-                shippingAddress.city,
-                shippingAddress.state,
-                shippingAddress.postal_code,
-                shippingAddress.country,
-                shippingPhone,
+                uuid(), customerId, isDefault, shippingName,
+                shippingAddress.line1, shippingAddress.line2 || null,
+                shippingAddress.city, shippingAddress.state,
+                shippingAddress.postal_code, shippingAddress.country, shippingPhone,
               ]
             );
           }
         }
 
-        // Create order (now with customer link, shipping details, and discount)
+        // Create order
         const orderId = uuid();
         await db.run(
           `INSERT INTO orders (id, customer_id, number, status, customer_email, 
@@ -188,47 +165,30 @@ webhooks.post('/stripe', async (c) => {
            stripe_checkout_session_id, stripe_payment_intent_id)
            VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            orderId,
-            customerId,
-            orderNumber,
-            customerEmail,
-            shippingName,
-            shippingPhone,
+            orderId, customerId, orderNumber, customerEmail,
+            shippingName, shippingPhone,
             shippingAddress ? JSON.stringify(shippingAddress) : null,
             subtotalCents,
             session.total_details?.amount_tax ?? 0,
             session.total_details?.amount_shipping ?? 0,
             session.amount_total ?? 0,
             cart.currency,
-            discountCode,
-            discountId,
-            discountAmountCents,
-            session.id,
-            session.payment_intent,
+            discountCode, discountId, discountAmountCents,
+            session.id, session.payment_intent,
           ]
         );
 
-        // Track discount usage for per-customer limit tracking
-        // Note: usage_count was already incremented at checkout time (atomic reservation)
-        // We only record the usage here for per-customer tracking and audit purposes
+        // Discount usage tracking
         if (discountId && discountAmountCents > 0) {
-          // Check if already recorded (idempotency)
-          const [existing] = await db.query<any>(
+          const [existingUsage] = await db.query<any>(
             `SELECT id FROM discount_usage WHERE order_id = ? AND discount_id = ?`,
             [orderId, discountId]
           );
 
-          if (!existing) {
-            // Enforce per-customer limit atomically using conditional INSERT
-            // This prevents race conditions from concurrent checkouts
-            // Reuse discount object from earlier in the function
+          if (!existingUsage) {
             if (discount?.usage_limit_per_customer !== null) {
-              // Use atomic conditional INSERT: only insert if current usage count is below limit
-              // This prevents concurrent checkouts from bypassing the per-customer limit
               const usageId = uuid();
               const customerEmailLower = cart.customer_email.toLowerCase();
-
-              // For SQLite/D1: Use INSERT with SELECT and WHERE clause to atomically check limit
               const result = await db.run(
                 `INSERT INTO discount_usage (id, discount_id, order_id, customer_email, discount_amount_cents)
                  SELECT ?, ?, ?, ?, ?
@@ -236,48 +196,37 @@ webhooks.post('/stripe', async (c) => {
                    SELECT COUNT(*) FROM discount_usage 
                    WHERE discount_id = ? AND customer_email = ?
                  ) < ?`,
-                [
-                  usageId,
-                  discountId,
-                  orderId,
-                  customerEmailLower,
-                  discountAmountCents,
-                  discountId,
-                  customerEmailLower,
-                  discount.usage_limit_per_customer,
-                ]
+                [usageId, discountId, orderId, customerEmailLower, discountAmountCents,
+                 discountId, customerEmailLower, discount.usage_limit_per_customer]
               );
 
-              // If insert failed (changes === 0), the limit was exceeded
-              // This can happen with concurrent checkouts - the order is already created and paid,
-              // so we log this but don't fail the webhook
               if (result.changes === 0) {
-                // Limit exceeded - this shouldn't happen if checkout validation worked correctly,
-                // but can occur with concurrent checkouts. Log for monitoring.
                 console.warn(
                   `Discount usage limit exceeded for customer ${customerEmailLower} and discount ${discountId}, ` +
-                    `but order ${orderId} already created (payment succeeded). This may indicate a race condition.`
+                    `but order ${orderId} already created (payment succeeded). Race condition.`
                 );
               }
             } else {
-              // No per-customer limit, safe to insert directly
               await db.run(
                 `INSERT INTO discount_usage (id, discount_id, order_id, customer_email, discount_amount_cents)
                  VALUES (?, ?, ?, ?, ?)`,
-                [
-                  uuid(),
-                  discountId,
-                  orderId,
-                  cart.customer_email.toLowerCase(),
-                  discountAmountCents,
-                ]
+                [uuid(), discountId, orderId, cart.customer_email.toLowerCase(), discountAmountCents]
               );
             }
           }
-          // If already exists, silently skip
         }
 
-        // Create order items & update inventory
+        // Create order items, update inventory, and collect variant metadata
+        // We fetch variant product_type here so the email template knows what to render
+        const itemsWithType: Array<{
+          sku: string;
+          title: string;
+          qty: number;
+          unit_price_cents: number;
+          product_type: 'physical' | 'digital';
+          digital_asset_key: string | null;
+        }> = [];
+
         for (const item of items) {
           await db.run(
             `INSERT INTO order_items (id, order_id, sku, title, qty, unit_price_cents) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -293,19 +242,108 @@ webhooks.post('/stripe', async (c) => {
             `INSERT INTO inventory_logs (id, sku, delta, reason) VALUES (?, ?, ?, 'sale')`,
             [uuid(), item.sku, -item.qty]
           );
+
+          const [variant] = await db.query<{
+            product_type: 'physical' | 'digital';
+            digital_asset_key: string | null;
+          }>(
+            `SELECT product_type, digital_asset_key FROM variants WHERE sku = ? LIMIT 1`,
+            [item.sku]
+          );
+
+          itemsWithType.push({
+            sku: item.sku,
+            title: item.title,
+            qty: item.qty,
+            unit_price_cents: item.unit_price_cents,
+            product_type: variant?.product_type ?? 'physical',
+            digital_asset_key: variant?.digital_asset_key ?? null,
+          });
         }
 
-        // Update cart status to prevent cron from treating it as abandoned checkout
-        // This prevents the abandoned checkout cleanup from incorrectly decrementing discount usage_count
+        // Generate download tokens for digital items
+        const digitalItems = itemsWithType.filter(i => i.product_type === 'digital');
+        let downloadTokens: Array<{ plain_token: string; sku: string }> = [];
+
+        if (digitalItems.length > 0) {
+          downloadTokens = await createDownloadTokens(
+            db,
+            orderId,
+            digitalItems.map(i => ({ sku: i.sku }))
+          );
+        }
+
+        // Mark cart as expired
         await db.run(`UPDATE carts SET status = 'expired', updated_at = ? WHERE id = ?`, [
-          now(),
-          cartId,
+          now(), cartId,
         ]);
 
+        // Send order confirmation email (best-effort, never fail the webhook)
+        try {
+          const emailProvider = await getEmailProvider(db);
+
+          if (emailProvider) {
+            // Build store base URL for download links
+            // Falls back to IMAGES_URL domain if STORE_URL isn't set
+            const storeBaseUrl = (c.env as any).STORE_URL
+              ?? (c.env.IMAGES_URL ? new URL(c.env.IMAGES_URL).origin : 'https://yourstore.com');
+            const storeName = c.env.STORE_NAME ?? 'Your Store';
+
+            // Map items to template format, attaching download tokens for digital items
+            const tokenBySkU = new Map(downloadTokens.map(t => [t.sku, t.plain_token]));
+
+            const templateItems = itemsWithType.map(item => ({
+              sku: item.sku,
+              title: item.title,
+              qty: item.qty,
+              unit_price_cents: item.unit_price_cents,
+              product_type: item.product_type,
+              download_token: item.product_type === 'digital'
+                ? tokenBySkU.get(item.sku)
+                : undefined,
+            }));
+
+            const { html, text } = renderOrderConfirmation({
+              order_number: orderNumber,
+              customer_email: customerEmail,
+              store_name: storeName,
+              store_base_url: storeBaseUrl,
+              items: templateItems,
+              subtotal_cents: subtotalCents,
+              discount: discountCode
+                ? { code: discountCode, amount_cents: discountAmountCents }
+                : null,
+              tax_cents: session.total_details?.amount_tax ?? 0,
+              shipping_cents: session.total_details?.amount_shipping ?? 0,
+              total_cents: session.amount_total ?? 0,
+              currency: cart.currency,
+              shipping_address: shippingAddress
+                ? {
+                    line1: shippingAddress.line1,
+                    line2: shippingAddress.line2,
+                    city: shippingAddress.city,
+                    state: shippingAddress.state,
+                    postal_code: shippingAddress.postal_code,
+                    country: shippingAddress.country,
+                  }
+                : null,
+              shipping_name: shippingName,
+            });
+
+            await emailProvider.send({
+              to: customerEmail,
+              subject: `Order confirmed — ${orderNumber}`,
+              html,
+              text,
+            });
+          }
+        } catch (emailErr: any) {
+          // Email failure must never break order creation
+          console.error(`Failed to send order confirmation for ${orderNumber}: ${emailErr.message}`);
+        }
+
         // Dispatch order.created webhook
-        const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [
-          orderId,
-        ]);
+        const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [orderId]);
         await dispatchWebhooks(c.var.db, c.executionCtx, 'order.created', {
           order: {
             id: orderId,

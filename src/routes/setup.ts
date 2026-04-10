@@ -4,6 +4,8 @@ import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, now, type HonoEnv } from '../types';
 import { SetupStripeBody, OkResponse, ErrorResponse } from '../schemas';
+import { createEmailProvider, type EmailProviderName } from '../lib/email/index';
+
 
 const app = new OpenAPIHono<HonoEnv>();
 
@@ -50,6 +52,10 @@ app.openapi(initKeys, async (c) => {
   return c.json({ ok: true as const }, 200);
 });
 
+// ============================================================
+// SETUP STRIPE
+// ============================================================
+
 const setupStripe = createRoute({
   method: 'post',
   path: '/stripe',
@@ -92,6 +98,147 @@ app.openapi(setupStripe, async (c) => {
   );
 
   return c.json({ ok: true as const }, 200);
+});
+
+// ============================================================
+// SETUP EMAIL
+// ============================================================
+
+const SetupEmailBody = z.object({
+  provider: z.enum(['resend', 'sendgrid', 'mailgun', 'postmark']).openapi({
+    example: 'resend',
+    description: 'Email provider. Can be swapped at any time by calling this endpoint again.',
+  }),
+  api_key: z.string().min(1).openapi({ example: 're_abc123' }),
+  from_address: z.string().min(1).openapi({
+    example: 'Your Store <noreply@yourstore.com>',
+    description: 'Sender address used for all outbound emails',
+  }),
+  mailgun_domain: z.string().optional().openapi({
+    example: 'mg.yourstore.com',
+    description: 'Required when provider is "mailgun"',
+  }),
+  mailgun_region: z.enum(['us', 'eu']).optional().openapi({
+    description: 'Mailgun region. Defaults to "us".',
+  }),
+}).openapi('SetupEmail');
+
+const EmailStatusResponse = z.object({
+  ok: z.literal(true),
+  provider: z.string(),
+  from_address: z.string(),
+}).openapi('EmailStatus');
+
+const setupEmailRoute = createRoute({
+  method: 'post',
+  path: '/email',
+  tags: ['Setup'],
+  summary: 'Configure email provider',
+  description: [
+    'Set or swap the email provider used for order confirmation emails.',
+    'The API key is validated by sending a test request to the provider.',
+    'Supported providers: resend, sendgrid, mailgun, postmark.',
+    'Call this endpoint again at any time to switch providers.',
+  ].join(' '),
+  security: [{ bearerAuth: [] }],
+  middleware: [authMiddleware, adminOnly] as const,
+  request: {
+    body: { content: { 'application/json': { schema: SetupEmailBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: EmailStatusResponse } }, description: 'Email provider configured' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid configuration' },
+  },
+});
+
+app.openapi(setupEmailRoute, async (c) => {
+  const body = c.req.valid('json');
+
+  if (body.provider === 'mailgun' && !body.mailgun_domain) {
+    throw ApiError.invalidRequest('mailgun_domain is required when provider is "mailgun"');
+  }
+
+  // Validate the provider config by instantiating it
+  // (throws if required fields are missing)
+  try {
+    await createEmailProvider({
+      provider: body.provider as EmailProviderName,
+      api_key: body.api_key,
+      from_address: body.from_address,
+      mailgun_domain: body.mailgun_domain,
+      mailgun_region: body.mailgun_region,
+    });
+  } catch (err: any) {
+    throw ApiError.invalidRequest(`Invalid email configuration: ${err.message}`);
+  }
+
+  const db = getDb(c.var.db);
+  const configValue = JSON.stringify({
+    provider: body.provider,
+    api_key: body.api_key,
+    from_address: body.from_address,
+    mailgun_domain: body.mailgun_domain ?? null,
+    mailgun_region: body.mailgun_region ?? 'us',
+  });
+
+  await db.run(
+    `INSERT INTO config (key, value, updated_at) VALUES ('email', ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?`,
+    [configValue, now(), configValue, now()]
+  );
+
+  return c.json({
+    ok: true as const,
+    provider: body.provider,
+    from_address: body.from_address,
+  }, 200);
+});
+
+// ============================================================
+// GET /setup/email — check current config (no secrets returned)
+// ============================================================
+
+const getEmailRoute = createRoute({
+  method: 'get',
+  path: '/email',
+  tags: ['Setup'],
+  summary: 'Get current email provider',
+  security: [{ bearerAuth: [] }],
+  middleware: [authMiddleware, adminOnly] as const,
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            configured: z.boolean(),
+            provider: z.string().nullable(),
+            from_address: z.string().nullable(),
+          }),
+        },
+      },
+      description: 'Current email config (API key omitted)',
+    },
+  },
+});
+
+app.openapi(getEmailRoute, async (c) => {
+  const db = getDb(c.var.db);
+  const [row] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'email' LIMIT 1`);
+
+  if (!row) {
+    return c.json({ configured: false, provider: null, from_address: null }, 200);
+  }
+
+  try {
+    const cfg = JSON.parse(row.value);
+    return c.json({
+      configured: true,
+      provider: cfg.provider ?? null,
+      from_address: cfg.from_address ?? null,
+    }, 200);
+  } catch {
+    return c.json({ configured: false, provider: null, from_address: null }, 200);
+  }
 });
 
 export { app as setup };
