@@ -46,6 +46,11 @@ export const rateLimits = {
       requests: 20,
       windowMs: 60 * 1000,
     },
+	// Webhooks from FedaPay need higher limits
+	'/v1/webhooks/fedapay': {
+	  requests: 1000,
+      windowMs: 60 * 1000,
+	},
   },
 
   // IPs/keys to never rate limit (e.g., internal services)

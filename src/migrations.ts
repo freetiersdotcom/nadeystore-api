@@ -74,6 +74,9 @@ CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expire
 export const MIGRATIONS = `
 ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CHECK (product_type IN ('physical', 'digital'));
 ALTER TABLE variants ADD COLUMN digital_asset_key TEXT
+ALTER TABLE variants ADD COLUMN updated_at TEXT;
+ALTER TABLE carts ADD COLUMN ship_to TEXT;
+ALTER TABLE carts ADD COLUMN shipping_name TEXT
 `;
 
 // The download_tokens table and its indexes go into SCHEMA (already uses IF NOT EXISTS).

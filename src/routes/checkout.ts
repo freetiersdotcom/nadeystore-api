@@ -18,6 +18,9 @@ import {
   CartTotals,
 } from '../schemas';
 
+import { prepareCheckout, setCartShipping } from '../lib/checkout';
+import { createFedaPayCheckout } from '../lib/fedapay';
+
 const RemoveDiscountResponse = z.object({
   discount: z.null(),
   totals: CartTotals,
@@ -247,7 +250,8 @@ const checkoutCart = createRoute({
 
 app.openapi(checkoutCart, async (c) => {
   const { cartId } = c.req.valid('param');
-  const { success_url, cancel_url, collect_shipping, shipping_countries, shipping_options } = c.req.valid('json');
+  const { success_url, cancel_url, collect_shipping, shipping_countries, shipping_options } =
+    c.req.valid('json');
 
   const stripeSecretKey = c.get('auth').stripeSecretKey;
   if (!stripeSecretKey) {
@@ -256,239 +260,77 @@ app.openapi(checkoutCart, async (c) => {
 
   const db = getDb(c.var.db);
 
-  const statusUpdateResult = await db.run(
-    `UPDATE carts SET status = 'checked_out', updated_at = ? WHERE id = ? AND status = 'open'`,
-    [now(), cartId]
-  );
+  // Shared pre-checkout: validates, locks cart, reserves inventory + discount
+  const prepared = await prepareCheckout(db, cartId, 'stripe');
 
-  if (statusUpdateResult.changes === 0) {
-    const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ?`, [cartId]);
-    if (!cart) throw ApiError.notFound('Cart not found');
-    if (cart.status !== 'open') throw ApiError.conflict('Cart is not open');
-    throw ApiError.invalidRequest('Failed to initiate checkout. Please try again.');
-  }
-
-  const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ?`, [cartId]);
-  if (!cart) throw ApiError.notFound('Cart not found');
-
-  const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
-  if (items.length === 0) {
-    await db.run(`UPDATE carts SET status = 'open', updated_at = ? WHERE id = ?`, [now(), cartId]);
-    throw ApiError.invalidRequest('Cart is empty');
-  }
-
-  const subtotalCents = items.reduce((sum, item) => sum + item.unit_price_cents * item.qty, 0);
-
-  const revertCartStatus = async () => {
-    await db.run(`UPDATE carts SET status = 'open', updated_at = ? WHERE id = ?`, [now(), cartId]);
-  };
-
-  let discountAmountCents = 0;
-  let discount: Discount | null = null;
-  let discountReserved = false;
-
-  if (cart.discount_id) {
-    const [discountRow] = await db.query<any>(`SELECT * FROM discounts WHERE id = ?`, [
-      cart.discount_id,
-    ]);
-    if (discountRow) {
-      discount = discountRow as Discount;
-
-      try {
-        await validateDiscount(db, discount, subtotalCents, cart.customer_email);
-      } catch (err) {
-        await db.run(
-          `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-          [cartId]
-        );
-        await revertCartStatus();
-        if (err instanceof ApiError) throw err;
-        throw ApiError.invalidRequest('Discount is no longer valid');
-      }
-
-      const currentTime = now();
-
-      if (discount.usage_limit_per_customer !== null) {
-        const [usage] = await db.query<any>(
-          `SELECT COUNT(*) as count FROM discount_usage WHERE discount_id = ? AND customer_email = ?`,
-          [discount.id, cart.customer_email.toLowerCase()]
-        );
-        if (usage && usage.count >= discount.usage_limit_per_customer) {
-          await db.run(
-            `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-            [cartId]
-          );
-          await revertCartStatus();
-          throw ApiError.invalidRequest('You have already used this discount');
-        }
-      }
-
-      if (discount.usage_limit !== null) {
-        const result = await db.run(
-          `UPDATE discounts 
-           SET usage_count = usage_count + 1, updated_at = ? 
-           WHERE id = ? 
-             AND status = 'active'
-             AND (starts_at IS NULL OR starts_at <= ?)
-             AND (expires_at IS NULL OR expires_at >= ?)
-             AND usage_count < usage_limit`,
-          [currentTime, discount.id, currentTime, currentTime]
-        );
-
-        if (result.changes === 0) {
-          await db.run(
-            `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-            [cartId]
-          );
-          await revertCartStatus();
-          throw ApiError.invalidRequest('Discount usage limit reached');
-        }
-        discountReserved = true;
-      } else {
-        const result = await db.run(
-          `UPDATE discounts 
-           SET updated_at = ? 
-           WHERE id = ? 
-             AND status = 'active'
-             AND (starts_at IS NULL OR starts_at <= ?)
-             AND (expires_at IS NULL OR expires_at >= ?)`,
-          [currentTime, discount.id, currentTime, currentTime]
-        );
-
-        if (result.changes === 0) {
-          await db.run(
-            `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-            [cartId]
-          );
-          await revertCartStatus();
-          throw ApiError.invalidRequest('Discount is no longer valid');
-        }
-      }
-
-      discountAmountCents = calculateDiscount(discount, subtotalCents);
-    } else {
-      await db.run(
-        `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-        [cartId]
-      );
-    }
-  }
-
-  const releaseReservedDiscount = async () => {
-    if (discountReserved && discount) {
-      await db.run(
-        `UPDATE discounts SET usage_count = MAX(usage_count - 1, 0), updated_at = ? WHERE id = ?`,
-        [now(), discount.id]
-      );
-    }
-  };
-
-  const reservedItems: { sku: string; qty: number }[] = [];
-
-  const releaseReservedInventory = async () => {
-    for (const item of reservedItems) {
-      await db.run(
-        `UPDATE inventory SET reserved = MAX(reserved - ?, 0), updated_at = ? WHERE sku = ?`,
-        [item.qty, now(), item.sku]
-      );
-    }
-    reservedItems.length = 0;
-  };
-
+  let session;
   try {
-    for (const item of items) {
-      const result = await db.run(
-        `UPDATE inventory SET reserved = reserved + ?, updated_at = ? 
-         WHERE sku = ? AND on_hand - reserved >= ?`,
-        [item.qty, now(), item.sku, item.qty]
-      );
+    const stripe = new Stripe(stripeSecretKey);
 
-      if (result.changes === 0) {
-        await releaseReservedInventory();
-        throw ApiError.insufficientInventory(item.sku);
-      }
+    // Build line items — use final_amount_cents if discount was applied
+    // by distributing discount proportionally across items, or let Stripe
+    // handle it via a coupon. Current approach: pass coupon if discount exists.
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] =
+      prepared.items.map(item => ({
+        price_data: {
+          currency:     prepared.currency.toLowerCase(),
+          product_data: { name: item.title },
+          unit_amount:  item.unit_price_cents,
+        },
+        quantity: item.qty,
+      }));
 
-      reservedItems.push({ sku: item.sku, qty: item.qty });
-    }
-  } catch (err) {
-    await releaseReservedDiscount();
-    await releaseReservedInventory();
-    await revertCartStatus();
-    throw err;
-  }
+    // Build Stripe coupon for discount if applicable
+    let stripeCouponId: string | null = null;
+    if (prepared.discount && prepared.discount_amount_cents > 0) {
+      const d = prepared.discount;
+      const needsOnTheFly = d.type === 'percentage' && d.max_discount_cents;
 
-  const stripe = new Stripe(stripeSecretKey);
-
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = items.map((item) => ({
-    price_data: {
-      currency: 'usd',
-      product_data: { name: item.title },
-      unit_amount: item.unit_price_cents,
-    },
-    quantity: item.qty,
-  }));
-
-  let stripeCouponId: string | null = null;
-  if (discount && discountAmountCents > 0) {
-    const needsOnTheFlyCoupon = discount.type === 'percentage' && discount.max_discount_cents;
-
-    if (discount.stripe_coupon_id && !needsOnTheFlyCoupon) {
-      stripeCouponId = discount.stripe_coupon_id;
-    } else if (stripeSecretKey) {
-      try {
-        const couponParams: Stripe.CouponCreateParams = {
-          duration: 'once',
-          metadata: { merchant_discount_id: discount.id },
-        };
-
-        if (discount.type === 'percentage' && discount.max_discount_cents) {
-          couponParams.amount_off = discountAmountCents;
-          couponParams.currency = 'usd';
-        } else if (discount.type === 'percentage') {
-          couponParams.percent_off = discount.value;
-        } else {
-          couponParams.amount_off = discount.value;
-          couponParams.currency = 'usd';
+      if (d.stripe_coupon_id && !needsOnTheFly) {
+        stripeCouponId = d.stripe_coupon_id;
+      } else {
+        try {
+          const couponParams: Stripe.CouponCreateParams = { duration: 'once' };
+          if (d.type === 'percentage' && d.max_discount_cents) {
+            couponParams.amount_off = prepared.discount_amount_cents;
+            couponParams.currency   = prepared.currency.toLowerCase();
+          } else if (d.type === 'percentage') {
+            couponParams.percent_off = d.value;
+          } else {
+            couponParams.amount_off = d.value;
+            couponParams.currency   = prepared.currency.toLowerCase();
+          }
+          const coupon  = await stripe.coupons.create(couponParams);
+          stripeCouponId = coupon.id;
+        } catch (err: any) {
+          await prepared.rollback();
+          console.error(`Stripe coupon creation failed: ${err.message}`);
+          throw ApiError.invalidRequest(
+            'Failed to apply discount. Remove it and try again.'
+          );
         }
-
-        const coupon = await stripe.coupons.create(couponParams);
-        stripeCouponId = coupon.id;
-      } catch (err: any) {
-        await releaseReservedDiscount();
-        await releaseReservedInventory();
-        await revertCartStatus();
-        console.error(`Failed to create Stripe coupon for discount: ${err.message}`);
-        throw ApiError.invalidRequest(
-          'Failed to apply discount. Please try again or remove the discount and proceed.'
-        );
       }
     }
-  }
 
-  const defaultShippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] = [
-    {
+    const defaultShippingOptions: Stripe.Checkout.SessionCreateParams.ShippingOption[] = [{
       shipping_rate_data: {
         type: 'fixed_amount',
-        fixed_amount: { amount: 0, currency: 'usd' },
+        fixed_amount: { amount: 0, currency: prepared.currency.toLowerCase() },
         display_name: 'Standard Shipping',
         delivery_estimate: {
           minimum: { unit: 'business_day', value: 5 },
           maximum: { unit: 'business_day', value: 7 },
         },
       },
-    },
-  ];
+    }];
 
-  let session;
-  try {
     session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      customer_email: cart.customer_email,
-      automatic_tax: { enabled: true },
+      mode:           'payment',
+      customer_email: prepared.cart.customer_email,
+      automatic_tax:  { enabled: true },
       ...(collect_shipping && {
         shipping_address_collection: {
-          allowed_countries:
-            shipping_countries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
+          allowed_countries: shipping_countries as any,
         },
         shipping_options: shipping_options ?? defaultShippingOptions,
       }),
@@ -498,30 +340,154 @@ app.openapi(checkoutCart, async (c) => {
       cancel_url,
       metadata: {
         cart_id: cartId,
-        ...(discount && {
-          discount_id: discount.id,
-          discount_code: discount.code || '',
-          discount_type: discount.type,
+        ...(prepared.discount && {
+          discount_id:   prepared.discount.id,
+          discount_code: prepared.discount.code || '',
+          discount_type: prepared.discount.type,
         }),
       },
     });
-  } catch {
-    await releaseReservedDiscount();
-    await releaseReservedInventory();
-    await revertCartStatus();
-    throw ApiError.invalidRequest('Payment processing error. Please try again.');
+  } catch (err) {
+    if (!(err instanceof ApiError)) await prepared.rollback();
+    throw err;
   }
 
   await db.run(
-    `UPDATE carts SET stripe_checkout_session_id = ?, discount_amount_cents = ?, updated_at = ? WHERE id = ?`,
-    [session.id, discountAmountCents, now(), cartId]
+    `UPDATE carts SET stripe_checkout_session_id = ?, discount_amount_cents = ?, updated_at = ?
+     WHERE id = ?`,
+    [session.id, prepared.discount_amount_cents, now(), cartId]
   );
 
   return c.json({
-    checkout_url: session.url!,
-    stripe_checkout_session_id: session.id,
+    id:           prepared.cart.id,
+    checkout_url: session.url,
+    expires_at:   new Date(session.expires_at * 1000).toISOString(),
   }, 200);
 });
+
+const FedaPayCheckoutBody = z.object({
+  success_url: z.string().url().openapi({ example: 'https://yourstore.com/success' }),
+  cancel_url:  z.string().url().openapi({ example: 'https://yourstore.com/cancel' }),
+}).openapi('FedaPayCheckoutBody');
+
+const FedaPayCheckoutResponse = z.object({
+  checkout_url:   z.string().url(),
+  transaction_id: z.number().int(),
+  cart_id:        z.string(),
+}).openapi('FedaPayCheckoutResponse');
+
+const fedaPayCheckout = createRoute({
+  method: 'post',
+  path:   '/{cartId}/checkout/fedapay',
+  tags:   ['Checkout'],
+  summary: 'Create FedaPay checkout session',
+  description: [
+    'Creates a FedaPay hosted checkout session for the cart.',
+    'Discounts and inventory are reserved before calling FedaPay.',
+    'FedaPay posts to /v1/webhooks/fedapay on payment confirmation.',
+    'Configure via POST /v1/setup/fedapay.',
+  ].join(' '),
+  request: {
+    params: CartIdParam,
+    body:   { content: { 'application/json': { schema: FedaPayCheckoutBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: FedaPayCheckoutResponse } }, description: 'Checkout URL' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid request' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart not found' },
+    409: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart not open' },
+  },
+});
+
+app.openapi(fedaPayCheckout, async (c) => {
+  const { cartId }    = c.req.valid('param');
+  const { success_url } = c.req.valid('json');
+  const db = getDb(c.var.db);
+
+  const [config] = await db.query<any>(`SELECT * FROM config WHERE key = 'fedapay'`);
+  if (!config?.value) throw ApiError.invalidRequest('FedaPay not configured. POST /v1/setup/fedapay first.');
+  const fedaPayConfig = JSON.parse(config.value);
+
+  // Shared pre-checkout (validates currency against FedaPay's supported list)
+  const prepared = await prepareCheckout(db, cartId, 'fedapay');
+
+  const description = prepared.items.map(i => i.title).join(', ').slice(0, 200);
+
+  let result: { checkout_url: string; transaction_id: number };
+  try {
+    result = await createFedaPayCheckout({
+      cartId,
+      amountCents:   prepared.final_amount_cents,
+      currency:      prepared.currency,
+      customerEmail: prepared.cart.customer_email,
+      description,
+      callbackUrl:   success_url,
+      config:        fedaPayConfig,
+    });
+  } catch (err: any) {
+    await prepared.rollback();
+    throw ApiError.invalidRequest(`FedaPay checkout error: ${err.message}`);
+  }
+
+  // Store discount amount on cart so the webhook handler can read it
+  await db.run(
+    `UPDATE carts SET discount_amount_cents = ?, updated_at = ? WHERE id = ?`,
+    [prepared.discount_amount_cents, now(), cartId]
+  );
+
+  return c.json({
+    checkout_url:   result.checkout_url,
+    transaction_id: result.transaction_id,
+    cart_id:        cartId,
+  }, 200);
+});
+
+const SetShippingBody = z.object({
+  name:        z.string().optional().nullable(),
+  line1:       z.string().min(1),
+  line2:       z.string().optional().nullable(),
+  city:        z.string().min(1),
+  state:       z.string().optional().nullable(),
+  postal_code: z.string().min(1),
+  country:     z.string().length(2).openapi({ example: 'BJ', description: 'ISO 3166-1 alpha-2' }),
+}).openapi('SetShipping');
+
+const setShippingRoute = createRoute({
+  method:  'patch',
+  path:    '/{cartId}/shipping',
+  tags:    ['Checkout'],
+  summary: 'Set shipping address on cart',
+  description: [
+    'Stores a shipping address on the cart before checkout.',
+    'The address is attached to the order regardless of payment provider.',
+    'For digital-only carts, this step is not required.',
+  ].join(' '),
+  request: {
+    params: CartIdParam,
+    body:   { content: { 'application/json': { schema: SetShippingBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: z.object({ ok: z.literal(true) }) } }, description: 'Address saved' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart not found' },
+  },
+});
+
+app.openapi(setShippingRoute, async (c) => {
+  const { cartId } = c.req.valid('param');
+  const body       = c.req.valid('json');
+  const db         = getDb(c.var.db);
+
+  const [cart] = await db.query<{ status: string }>(
+    `SELECT status FROM carts WHERE id = ? LIMIT 1`, [cartId]
+  );
+  if (!cart) throw ApiError.notFound('Cart not found');
+  if (cart.status !== 'open') throw ApiError.invalidRequest('Cart is not open');
+
+  await setCartShipping(db, cartId, body);
+
+  return c.json({ ok: true as const }, 200);
+});
+
 
 const applyDiscount = createRoute({
   method: 'post',
