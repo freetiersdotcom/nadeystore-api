@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { api, InventoryItem } from '../lib/api';
 import { Modal } from '../components/Modal';
+import { useT } from '../lib/locale-context';
 import clsx from 'clsx';
 
 const columnHelper = createColumnHelper<InventoryItem>();
@@ -29,6 +30,8 @@ const ADJUST_REASONS = ['restock', 'correction', 'damaged', 'return'] as const;
 
 export function Inventory() {
   const queryClient = useQueryClient();
+  const t = useT();
+
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
@@ -57,23 +60,23 @@ export function Inventory() {
   const columns = useMemo(
     () => [
       columnHelper.accessor('sku', {
-        header: 'SKU',
+        header: t('inventory.col.sku'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
       }),
       columnHelper.accessor('product_title', {
-        header: 'Product',
+        header: t('inventory.col.product'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue() || '-'}</span>,
       }),
       columnHelper.accessor('on_hand', {
-        header: 'On Hand',
+        header: t('inventory.col.onHand'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
       }),
       columnHelper.accessor('reserved', {
-        header: 'Reserved',
+        header: t('inventory.col.reserved'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
       }),
       columnHelper.accessor('available', {
-        header: 'Available',
+        header: t('inventory.col.available'),
         cell: (info) => {
           const value = info.getValue();
           const isLow = value <= 5 && value > 0;
@@ -93,7 +96,7 @@ export function Inventory() {
         },
       }),
     ],
-    []
+    [t]
   );
 
   const table = useReactTable({
@@ -120,7 +123,7 @@ export function Inventory() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4 h-9">
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-          Inventory
+          {t('inventory.title')}
         </h1>
         <button
           onClick={() => queryClient.invalidateQueries({ queryKey: ['inventory'] })}
@@ -148,7 +151,7 @@ export function Inventory() {
               type="text"
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
-              placeholder="Search..."
+              placeholder={t('common.search')}
               className="bg-transparent border-0 font-mono text-sm w-full focus:outline-none"
               style={{ color: 'var(--text)' }}
             />
@@ -162,7 +165,7 @@ export function Inventory() {
           </div>
         ) : inventory.length === 0 ? (
           <div className="py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-            No inventory yet
+            {t('inventory.empty')}
           </div>
         ) : (
           <table className="w-full">
@@ -234,7 +237,7 @@ export function Inventory() {
           setSelectedItem(null);
           setAdjustDelta('');
         }}
-        title={selectedItem?.sku || 'Inventory'}
+        title={selectedItem?.sku || t('inventory.title')}
         size="md"
       >
         {selectedItem && (
@@ -253,7 +256,7 @@ export function Inventory() {
               <div>
                 <p className="font-mono text-sm font-medium">{selectedItem.sku}</p>
                 <p className="font-mono text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {selectedItem.product_title || 'Unknown product'}
+                  {selectedItem.product_title || t('common.noResults')}
                 </p>
               </div>
             </div>
@@ -266,7 +269,7 @@ export function Inventory() {
               >
                 <p className="text-2xl font-mono font-semibold">{selectedItem.on_hand}</p>
                 <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  On Hand
+                  {t('inventory.col.onHand')}
                 </p>
               </div>
               <div
@@ -275,7 +278,7 @@ export function Inventory() {
               >
                 <p className="text-2xl font-mono font-semibold">{selectedItem.reserved}</p>
                 <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  Reserved
+                  {t('inventory.col.reserved')}
                 </p>
               </div>
               <div
@@ -292,7 +295,7 @@ export function Inventory() {
                   {selectedItem.available}
                 </p>
                 <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  Available
+                  {t('inventory.col.available')}
                 </p>
               </div>
             </div>
@@ -309,7 +312,7 @@ export function Inventory() {
                     className="block text-xs font-medium uppercase tracking-wide mb-2"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Quantity (+/-)
+                    {t('inventory.adjust.delta')}
                   </label>
                   <input
                     type="number"
@@ -324,13 +327,16 @@ export function Inventory() {
                       color: 'var(--text)',
                     }}
                   />
+                  <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
+                    {t('inventory.adjust.deltaHint')}
+                  </p>
                 </div>
                 <div>
                   <label
                     className="block text-xs font-medium uppercase tracking-wide mb-2"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Reason
+                    {t('inventory.adjust.reason')}
                   </label>
                   <select
                     value={adjustReason}
@@ -344,7 +350,7 @@ export function Inventory() {
                   >
                     {ADJUST_REASONS.map((r) => (
                       <option key={r} value={r}>
-                        {r.charAt(0).toUpperCase() + r.slice(1)}
+                        {t(`inventory.reason.${r}` as Parameters<typeof t>[0])}
                       </option>
                     ))}
                   </select>
@@ -375,7 +381,7 @@ export function Inventory() {
                 className="w-full px-4 py-2.5 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
                 style={{ background: 'var(--accent)', color: 'white' }}
               >
-                {adjustMutation.isPending ? 'Adjusting...' : 'Apply Adjustment'}
+                {adjustMutation.isPending ? t('common.adjusting') : t('inventory.adjust.apply')}
               </button>
             </form>
           </div>

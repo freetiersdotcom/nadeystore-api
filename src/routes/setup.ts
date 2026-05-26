@@ -241,4 +241,123 @@ app.openapi(getEmailRoute, async (c) => {
   }
 });
 
+
+const SetupFedaPayBody = z.object({
+  secret_key: z.string().min(1).openapi({
+    example: 'sk_sandbox_...',
+    description: 'FedaPay API secret key (sandbox or live)',
+  }),
+  webhook_secret: z.string().min(1).openapi({
+    example: 'wh_sandbox_...',
+    description: [
+      'FedaPay webhook signing secret.',
+      'Retrieve from: Dashboard → Workbench → Webhooks → Click to reveal.',
+    ].join(' '),
+  }),
+  sandbox: z.boolean().default(false).openapi({
+    description: 'true for sandbox/test mode, false for live. Defaults to false.',
+  }),
+}).openapi('SetupFedaPay');
+
+// ── POST /v1/setup/fedapay ────────────────────────────────────────────────────
+
+const setupFedaPay = createRoute({
+  method: 'post',
+  path: '/fedapay',
+  tags: ['Setup'],
+  summary: 'Connect FedaPay',
+  description: [
+    'Configure FedaPay as a payment gateway.',
+    'Validates the secret key against the FedaPay API before saving.',
+    'Call again at any time to update credentials or switch sandbox/live mode.',
+    'FedaPay config is read by the checkout and webhook routes at request time —',
+    'no restart required after updating.',
+  ].join(' '),
+  security: [{ bearerAuth: [] }],
+  middleware: [authMiddleware, adminOnly] as const,
+  request: {
+    body: { content: { 'application/json': { schema: SetupFedaPayBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: OkResponse } }, description: 'FedaPay connected' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid FedaPay key' },
+  },
+});
+
+app.openapi(setupFedaPay, async (c) => {
+  const { secret_key, webhook_secret, sandbox } = c.req.valid('json');
+
+  // Validate key by calling FedaPay API — use transactions list (a safe read-only endpoint)
+  const base = sandbox ? 'https://sandbox-api.fedapay.com' : 'https://api.fedapay.com';
+  const res = await fetch(`${base}/v1/transactions/search`, {
+    headers: { Authorization: `Bearer ${secret_key}` },
+  });
+
+  if (!res.ok) {
+    throw ApiError.invalidRequest('Invalid FedaPay secret key');
+  }
+
+  const db = getDb(c.var.db);
+  const configValue = JSON.stringify({ secret_key, webhook_secret, sandbox });
+
+  await db.run(
+    `INSERT INTO config (key, value, updated_at) VALUES ('fedapay', ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?`,
+    [configValue, now(), configValue, now()]
+  );
+
+  return c.json({ ok: true as const }, 200);
+});
+
+// ── GET /v1/setup/fedapay ─────────────────────────────────────────────────────
+
+const getFedaPayStatus = createRoute({
+  method: 'get',
+  path: '/fedapay',
+  tags: ['Setup'],
+  summary: 'Get FedaPay configuration status',
+  description: 'Returns current config status. Secret key and webhook secret are never returned.',
+  security: [{ bearerAuth: [] }],
+  middleware: [authMiddleware, adminOnly] as const,
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            configured: z.boolean(),
+            sandbox: z.boolean().nullable(),
+            has_secret_key: z.boolean(),
+            has_webhook_secret: z.boolean(),
+          }),
+        },
+      },
+      description: 'FedaPay config status (no secrets)',
+    },
+  },
+});
+
+app.openapi(getFedaPayStatus, async (c) => {
+  const db = getDb(c.var.db);
+  const [row] = await db.query<{ value: string }>(
+    `SELECT value FROM config WHERE key = 'fedapay' LIMIT 1`
+  );
+
+  if (!row) {
+    return c.json({ configured: false, sandbox: null, has_secret_key: false, has_webhook_secret: false }, 200);
+  }
+
+  try {
+    const cfg = JSON.parse(row.value);
+    return c.json({
+      configured: true,
+      sandbox: cfg.sandbox ?? false,
+      has_secret_key: !!cfg.secret_key,
+      has_webhook_secret: !!cfg.webhook_secret,
+    }, 200);
+  } catch {
+    return c.json({ configured: false, sandbox: null, has_secret_key: false, has_webhook_secret: false }, 200);
+  }
+});
+
+
 export { app as setup };

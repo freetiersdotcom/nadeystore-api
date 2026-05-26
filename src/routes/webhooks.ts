@@ -112,6 +112,51 @@ webhooks.post('/stripe', async (c) => {
   return c.json({ ok: true });
 });
 
+// Raw format as POSTed by FedaPay to the webhook endpoint
+interface FedaPayRawEvent {
+  klass:     string;           // "v1/event"
+  id:        string;           // FedaPay event ID (for deduplication)
+  type:      string;           // "transaction.approved" | "transaction.declined" etc.
+  entity:    string;           // stringified JSON of the transaction object
+  object_id: number;           // transaction numeric ID
+}
+
+// Shape of the parsed entity string
+interface FedaPayTransaction {
+  id:               number;
+  reference:        string;    // merchant_reference = cartId
+  amount:           number;
+  status:           string;
+  description:      string;
+  custom_metadata?: Record<string, string> | null;
+  currency_id?:     number;    // currency is a foreign key in the raw format
+  metadata?:        Record<string, unknown>;
+  // Note: currency ISO is NOT in entity — only currency_id.
+  // Use verifyFedaPayTransaction() to get the ISO code if needed,
+  // or read it from the cart (cart.currency) which is more reliable.
+}
+
+// POST /v1/webhooks/fedapay — CORRECTED
+// Raw format as POSTed by FedaPay to the webhook endpoint
+interface FedaPayTransaction {
+  id:               number;
+  reference:        string | null;
+  amount:           number;
+  status:           string;
+  description:      string;
+  custom_metadata?: Record<string, string> | null;
+  currency?:        { iso: string } | null;
+  metadata?:        Record<string, unknown>;
+}
+
+interface FedaPayRawEvent {
+  name:    string;             // "transaction.approved"
+  object:  string;             // "transaction"
+  entity:  FedaPayTransaction; // already a parsed object, not a string
+  account: Record<string, any>;
+}
+
+// POST /v1/webhooks/fedapay
 webhooks.post('/fedapay', async (c) => {
   const signature = c.req.header('x-fedapay-signature');
   const body      = await c.req.text();
@@ -132,48 +177,78 @@ webhooks.post('/fedapay', async (c) => {
     throw new ApiError('webhook_signature_invalid', 400, e.message);
   }
 
-  const payload    = JSON.parse(body) as { name: string; object: any };
-  const eventName  = payload.name;
-  const tx         = payload.object;
-  const eventId    = `fedapay_${tx.id}_${eventName}`;
+  let rawEvent: FedaPayRawEvent;
+  try {
+    rawEvent = JSON.parse(body);
+  } catch {
+    throw ApiError.invalidRequest('Invalid JSON payload');
+  }
+
+  const eventType = rawEvent.name;
+  const tx        = rawEvent.entity ?? null;
+  const txId      = tx?.id ?? null;
+
+  // No stable top-level event ID from FedaPay — construct one from event type + transaction ID
+  const dedupKey = `fedapay_evt_${eventType}_${txId}`;
 
   const [existing] = await db.query<any>(
-    `SELECT id FROM events WHERE stripe_event_id = ?`, [eventId]
+    `SELECT id FROM events WHERE stripe_event_id = ?`, [dedupKey]
   );
   if (existing) return c.json({ ok: true });
 
-  if (eventName === 'transaction.approved') {
-    const cartId = tx.reference ?? tx.custom_metadata?.cart_id;
+  if (eventType === 'transaction.approved' && tx) {
+
+    // Resolve cart ID — with fallback layers
+    let cartId: string | null = tx.custom_metadata?.cart_id ?? null;
+	
+	console.log(`[fedapay] First attempt cardId cart ${cartId}`);
+
+    if (!cartId && txId) {
+      const [row] = await db.query<{ cart_id: string }>(
+        `SELECT cart_id FROM fedapay_transactions WHERE transaction_id = ?`, [txId]
+      );
+      cartId = row?.cart_id ?? null;
+    }
+	
+	console.log(`[fedapay] Second attempt cardId cart ${cartId}`);
 
     if (cartId) {
-      c.executionCtx.waitUntil((async () => {
-        try {
-          // Optional API re-verify
-          const status = await verifyFedaPayTransaction(tx.id, fedaPayConfig);
-          if (status !== 'approved') {
-            console.warn(`[fedapay] API verify: tx ${tx.id} not approved`);
-            return;
+      const dbBinding    = c.var.db;
+      const storeBaseUrl = (c.env as any).STORE_URL
+        ?? (c.env.IMAGES_URL ? new URL(c.env.IMAGES_URL).origin : 'https://yourstore.com');
+
+      c.executionCtx.waitUntil(
+        (async () => {
+          try {
+            const status = await verifyFedaPayTransaction(txId!, fedaPayConfig);
+            if (status !== 'approved') {
+              console.warn(`[fedapay] API verify: tx ${txId} not approved, aborting`);
+              return;
+            }
+          } catch (err) {
+            console.warn(`[fedapay] API verify failed for tx ${txId} (proceeding):`, err);
           }
-        } catch (err) {
-          console.warn(`[fedapay] API verify failed (proceeding):`, err);
-        }
 
-        const storeBaseUrl = (c.env as any).STORE_URL
-          ?? (c.env.IMAGES_URL ? new URL(c.env.IMAGES_URL).origin : 'https://yourstore.com');
-
-        await createOrderFromCart(db as any, c.var.db, c.executionCtx, cartId, {
-          provider:     'fedapay',
-          providerRef:  String(tx.id),
-          storeBaseUrl,
-          storeName:    c.env.STORE_NAME ?? 'Your Store',
-        });
-      })().catch(err => console.error('[fedapay] order creation error:', err)));
+          await createOrderFromCart(getDb(dbBinding), dbBinding, c.executionCtx, cartId!, {
+            provider:    'fedapay',
+            providerRef: String(txId),
+            storeBaseUrl,
+            storeName:   c.env.STORE_NAME ?? 'Your Store',
+          });
+        })().catch(err => console.error('[fedapay] order creation error:', err))
+      );
+    } else {
+      console.warn(`[fedapay] transaction.approved — could not resolve cart for tx_id: ${txId}`);
     }
+
+  } else {
+    console.log(`[fedapay] ${eventType} — tx_id: ${txId}`);
   }
 
+  // Log event
   await db.run(
     `INSERT INTO events (id, stripe_event_id, type, payload) VALUES (?, ?, ?, ?)`,
-    [uuid(), eventId, eventName, JSON.stringify(tx)]
+    [uuid(), dedupKey, eventType, JSON.stringify(rawEvent.entity ?? {})]
   );
 
   return c.json({ ok: true });

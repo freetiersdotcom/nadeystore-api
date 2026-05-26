@@ -20,9 +20,11 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { api, Order } from '../lib/api';
+import { formatPrice } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
 import clsx from 'clsx';
+import { useT } from '../lib/locale-context';
 
 const columnHelper = createColumnHelper<Order>();
 
@@ -38,6 +40,8 @@ const ORDER_STATUSES = [
 
 export function Orders() {
   const queryClient = useQueryClient();
+  const t = useT();
+
   const [sorting, setSorting] = useState<SortingState>([{ id: 'created_at', desc: true }]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -73,7 +77,7 @@ export function Orders() {
   const columns = useMemo(
     () => [
       columnHelper.accessor('number', {
-        header: 'Order',
+        header: t('orders.col.order'),
         cell: (info) => (
           <span className="font-mono text-sm">
             {info.getValue() || info.row.original.id.slice(0, 8)}
@@ -82,26 +86,31 @@ export function Orders() {
       }),
       columnHelper.accessor((row) => row.shipping?.name || '', {
         id: 'name',
-        header: 'Name',
+        header: t('common.name'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue() || '-'}</span>,
       }),
       columnHelper.accessor('customer_email', {
-        header: 'Email',
+        header: t('orders.col.customer'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue() || '-'}</span>,
       }),
       columnHelper.accessor('status', {
-        header: 'Status',
-        cell: (info) => <StatusBadge status={info.getValue()} />,
+        header: t('orders.col.status'),
+        cell: (info) => (
+          <StatusBadge
+            status={info.getValue()}
+            label={t(`orders.status.${info.getValue()}` as Parameters<typeof t>[0])}
+          />
+        ),
       }),
       columnHelper.accessor((row) => row.amounts.total_cents, {
         id: 'total',
-        header: 'Total',
+        header: t('orders.col.total'),
         cell: (info) => (
-          <span className="font-mono text-sm">${(info.getValue() / 100).toFixed(2)}</span>
+          <span className="font-mono text-sm">{formatPrice(info.getValue())}</span>
         ),
       }),
       columnHelper.accessor('created_at', {
-        header: 'Date',
+        header: t('orders.col.date'),
         cell: (info) => (
           <span className="font-mono text-sm">
             {new Date(info.getValue()).toLocaleDateString()}
@@ -109,7 +118,7 @@ export function Orders() {
         ),
       }),
     ],
-    []
+    [t]
   );
 
   const table = useReactTable({
@@ -123,14 +132,12 @@ export function Orders() {
     getFilteredRowModel: getFilteredRowModel(),
   });
 
-  const formatCurrency = (cents: number) => `$${(cents / 100).toFixed(2)}`;
-
   return (
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-4 h-9">
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-          Orders
+          {t('orders.title')}
         </h1>
         <button
           onClick={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
@@ -159,7 +166,7 @@ export function Orders() {
               type="text"
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
-              placeholder="Search..."
+              placeholder={t('orders.search')}
               className="bg-transparent border-0 font-mono text-sm w-full focus:outline-none"
               style={{ color: 'var(--text)' }}
             />
@@ -175,10 +182,10 @@ export function Orders() {
               color: statusFilter ? 'var(--text)' : 'var(--text-muted)',
             }}
           >
-            <option value="">All statuses</option>
+            <option value="">{t('orders.filter.all')}</option>
             {ORDER_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {t(`orders.status.${s}` as Parameters<typeof t>[0])}
               </option>
             ))}
           </select>
@@ -191,7 +198,7 @@ export function Orders() {
           </div>
         ) : orders.length === 0 ? (
           <div className="py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-            No orders yet
+            {t('orders.empty')}
           </div>
         ) : (
           <table className="w-full">
@@ -253,14 +260,19 @@ export function Orders() {
         open={!!selectedOrder}
         onClose={() => setSelectedOrder(null)}
         title={
-          selectedOrder ? `Order ${selectedOrder.number || selectedOrder.id.slice(0, 8)}` : 'Order'
+          selectedOrder
+            ? `${t('orders.detail.title')} ${selectedOrder.number || selectedOrder.id.slice(0, 8)}`
+            : t('orders.detail.title')
         }
         size="lg"
       >
         {selectedOrder && (
           <div className="space-y-5">
             {/* Status Badge */}
-            <StatusBadge status={selectedOrder.status} />
+            <StatusBadge
+              status={selectedOrder.status}
+              label={t(`orders.status.${selectedOrder.status}` as Parameters<typeof t>[0])}
+            />
 
             {/* Two column layout */}
             <div className="grid grid-cols-2 gap-5">
@@ -272,7 +284,7 @@ export function Orders() {
                     className="text-xs font-medium uppercase tracking-wide mb-2"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Customer
+                    {t('orders.col.customer')}
                   </h4>
                   {selectedOrder.shipping?.name && (
                     <p className="font-mono text-sm font-medium">{selectedOrder.shipping.name}</p>
@@ -291,13 +303,13 @@ export function Orders() {
                 </div>
 
                 {/* Shipping Address */}
-                {selectedOrder.shipping?.address && (
+                {selectedOrder.shipping?.address ? (
                   <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
                     <h4
                       className="text-xs font-medium uppercase tracking-wide mb-2"
                       style={{ color: 'var(--text-secondary)' }}
                     >
-                      Ship To
+                      {t('orders.detail.address')}
                     </h4>
                     <div className="font-mono text-sm">
                       {selectedOrder.shipping.name && (
@@ -323,22 +335,26 @@ export function Orders() {
                       )}
                     </div>
                   </div>
+                ) : (
+                  <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                    {t('orders.detail.noShipping')}
+                  </p>
                 )}
 
-                {/* Stripe Info */}
+                {/* Payment info */}
                 {selectedOrder.stripe?.payment_intent_id && (
                   <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
                     <h4
                       className="text-xs font-medium uppercase tracking-wide mb-2"
                       style={{ color: 'var(--text-secondary)' }}
                     >
-                      Stripe
+                      {t('orders.detail.payment')}
                     </h4>
                     <p
                       className="text-xs font-mono break-all"
                       style={{ color: 'var(--text-muted)' }}
                     >
-                      PI: {selectedOrder.stripe.payment_intent_id}
+                      {t('orders.detail.sessionId')}: {selectedOrder.stripe.payment_intent_id}
                     </p>
                   </div>
                 )}
@@ -352,7 +368,7 @@ export function Orders() {
                     className="text-xs font-medium uppercase tracking-wide mb-2"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Items
+                    {t('orders.detail.items')}
                   </h4>
                   <div className="space-y-2">
                     {selectedOrder.items.map((item, i) => (
@@ -364,34 +380,44 @@ export function Orders() {
                           </p>
                         </div>
                         <p className="font-mono">
-                          {formatCurrency(item.unit_price_cents * item.qty)}
+                          {formatPrice(item.unit_price_cents * item.qty)}
                         </p>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Summary */}
+                {/* Financials */}
                 <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
+                  <h4
+                    className="text-xs font-medium uppercase tracking-wide mb-2"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {t('orders.detail.financials')}
+                  </h4>
                   <div className="space-y-1 text-sm font-mono">
                     <div className="flex justify-between">
-                      <span style={{ color: 'var(--text-secondary)' }}>Subtotal</span>
-                      <span>{formatCurrency(selectedOrder.amounts.subtotal_cents)}</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('orders.detail.subtotal')}</span>
+                      <span>{formatPrice(selectedOrder.amounts.subtotal_cents)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span style={{ color: 'var(--text-secondary)' }}>Tax</span>
-                      <span>{formatCurrency(selectedOrder.amounts.tax_cents)}</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('orders.detail.tax')}</span>
+                      <span>{formatPrice(selectedOrder.amounts.tax_cents)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span style={{ color: 'var(--text-secondary)' }}>Shipping</span>
-                      <span>{formatCurrency(selectedOrder.amounts.shipping_cents)}</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('orders.detail.shippingCost')}</span>
+                      <span>
+                        {selectedOrder.amounts.shipping_cents === 0
+                          ? t('orders.detail.free')
+                          : formatPrice(selectedOrder.amounts.shipping_cents)}
+                      </span>
                     </div>
                     <div
                       className="flex justify-between pt-2 mt-2 border-t font-semibold"
                       style={{ borderColor: 'var(--border)' }}
                     >
-                      <span>Total</span>
-                      <span>{formatCurrency(selectedOrder.amounts.total_cents)}</span>
+                      <span>{t('orders.detail.total')}</span>
+                      <span>{formatPrice(selectedOrder.amounts.total_cents)}</span>
                     </div>
                   </div>
                 </div>
@@ -409,7 +435,7 @@ export function Orders() {
                   className="text-xs font-medium uppercase tracking-wide mb-2"
                   style={{ color: 'var(--text-secondary)' }}
                 >
-                  Status
+                  {t('orders.col.status')}
                 </h4>
                 <select
                   value={selectedOrder.status}
@@ -429,7 +455,7 @@ export function Orders() {
                 >
                   {ORDER_STATUSES.map((s) => (
                     <option key={s} value={s}>
-                      {s}
+                      {t(`orders.status.${s}` as Parameters<typeof t>[0])}
                     </option>
                   ))}
                 </select>
@@ -442,11 +468,11 @@ export function Orders() {
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   <Truck size={14} />
-                  Tracking
+                  {t('orders.detail.tracking')}
                 </h4>
                 <input
                   type="text"
-                  placeholder="Tracking number"
+                  placeholder={t('orders.detail.trackingNumber')}
                   defaultValue={selectedOrder.tracking?.number || ''}
                   onBlur={(e) => {
                     if (e.target.value !== (selectedOrder.tracking?.number || '')) {
@@ -472,7 +498,7 @@ export function Orders() {
                     style={{ color: 'var(--accent)' }}
                   >
                     <ExternalLink size={14} />
-                    Track package
+                    {t('orders.detail.trackingUrl')}
                   </a>
                 )}
               </div>
@@ -484,19 +510,19 @@ export function Orders() {
               style={{ borderColor: 'var(--border)' }}
             >
               <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                Created {new Date(selectedOrder.created_at).toLocaleString()}
+                {t('common.createdAt')} {new Date(selectedOrder.created_at).toLocaleString()}
               </p>
               {selectedOrder.status === 'paid' && selectedOrder.stripe?.payment_intent_id && (
                 <button
                   onClick={() => {
-                    if (confirm('Are you sure you want to refund this order?')) {
+                    if (confirm(t('orders.detail.refundConfirm'))) {
                       refundMutation.mutate(selectedOrder.id);
                     }
                   }}
                   disabled={refundMutation.isPending}
                   className="text-sm font-medium text-red-500 hover:text-red-600 disabled:opacity-50"
                 >
-                  {refundMutation.isPending ? 'Refunding...' : 'Refund Order'}
+                  {refundMutation.isPending ? t('common.loading') : t('orders.detail.refund')}
                 </button>
               )}
             </div>

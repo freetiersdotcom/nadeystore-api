@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expire
 
 export const MIGRATIONS = `
 ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CHECK (product_type IN ('physical', 'digital'));
-ALTER TABLE variants ADD COLUMN digital_asset_key TEXT
+ALTER TABLE variants ADD COLUMN digital_asset_key TEXT;
 ALTER TABLE variants ADD COLUMN updated_at TEXT;
 ALTER TABLE carts ADD COLUMN ship_to TEXT;
 ALTER TABLE carts ADD COLUMN shipping_name TEXT
@@ -96,4 +96,14 @@ CREATE TABLE IF NOT EXISTS download_tokens (
 CREATE INDEX IF NOT EXISTS idx_download_tokens_order ON download_tokens(order_id);
 CREATE INDEX IF NOT EXISTS idx_download_tokens_sku ON download_tokens(sku);
 CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)
+`;
+
+export const FEDAPAY_TRANSACTIONS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS fedapay_transactions (
+  transaction_id INTEGER PRIMARY KEY,
+  cart_id        TEXT NOT NULL,
+  created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fedapay_transactions_cart ON fedapay_transactions(cart_id)
 `;

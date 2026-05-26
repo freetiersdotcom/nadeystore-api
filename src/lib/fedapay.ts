@@ -100,6 +100,8 @@ export async function createFedaPayCheckout(opts: {
     Authorization: `Bearer ${opts.config.secret_key}`,
     'Content-Type': 'application/json',
   };
+  
+  console.log('headers:', JSON.stringify(headers));
 
   // Step 1: Create the transaction
   const createRes = await fetch(`${base}/v1/transactions`, {
@@ -110,19 +112,23 @@ export async function createFedaPayCheckout(opts: {
       amount: opts.amountCents,
       currency: { iso: opts.currency },
       callback_url: opts.callbackUrl,
-      // merchant_reference is how the webhook handler identifies the cart
-      merchant_reference: opts.cartId,
       customer: { email: opts.customerEmail },
     }),
   });
+  
+  console.log('createRes:', JSON.stringify(createRes));
 
   if (!createRes.ok) {
     const err = await createRes.text();
     throw new Error(`FedaPay createTransaction failed (${createRes.status}): ${err}`);
   }
 
-  const created = await createRes.json() as { v1_transaction: { id: number } };
-  const transactionId = created.v1_transaction.id;
+  const created = await createRes.json() as Record<string, any>;
+  const transaction = created['v1/transaction'];
+  if (!transaction?.id) {
+    throw new Error(`FedaPay response missing transaction id. Raw: ${JSON.stringify(created)}`);
+  }
+  const transactionId: number = transaction.id;
 
   // Step 2: Get the hosted checkout URL
   const tokenRes = await fetch(`${base}/v1/transactions/${transactionId}/token`, {
@@ -135,7 +141,12 @@ export async function createFedaPayCheckout(opts: {
     throw new Error(`FedaPay getToken failed (${tokenRes.status}): ${err}`);
   }
 
-  const tokenData = await tokenRes.json() as { url: string };
+  const tokenData = await tokenRes.json() as Record<string, any>;
+  console.log('FedaPay token response:', JSON.stringify(tokenData))
+  const checkoutUrl = tokenData.url ?? tokenData['v1/transaction']?.payment_url;
+  if (!checkoutUrl) {
+    throw new Error(`FedaPay token response missing URL. Raw: ${JSON.stringify(tokenData)}`);
+  }
 
   return {
     checkout_url: tokenData.url,
@@ -162,6 +173,8 @@ export async function verifyFedaPayTransaction(
 
   if (!res.ok) throw new Error(`FedaPay API returned ${res.status}`);
 
-  const data = await res.json() as { v1_transaction: { status: string } };
-  return data.v1_transaction.status === 'approved' ? 'approved' : 'other';
+  const data = await res.json() as Record<string, any>;
+  const transaction = data['v1/transaction'];
+  console.log('fedapay transaction status:', JSON.stringify(transaction.status));
+  return transaction.status === 'approved' ? 'approved' : 'other';
 }

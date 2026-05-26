@@ -68,15 +68,11 @@ app.openapi(getDownload, async (c) => {
 
   // 1. Validate token
   const result = await validateDownloadToken(db, token);
-
   if (!result.ok) {
     switch (result.reason) {
-      case 'not_found':
-        throw ApiError.notFound('Download link not found or has expired');
-      case 'expired':
-        throw ApiError.invalidRequest('This download link has expired');
-      case 'limit_reached':
-        throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
+      case 'not_found':   throw ApiError.notFound('Download link not found or has expired');
+      case 'expired':     throw ApiError.invalidRequest('This download link has expired');
+      case 'limit_reached': throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
     }
   }
 
@@ -87,48 +83,49 @@ app.openapi(getDownload, async (c) => {
     `SELECT digital_asset_key, title FROM variants WHERE sku = ? LIMIT 1`,
     [tokenRow.sku]
   );
-
   if (!variant?.digital_asset_key) {
     throw ApiError.notFound('Asset not found for this product');
   }
 
   // 3. Check R2 bucket is configured
   const r2 = c.env.IMAGES as R2Bucket | undefined;
-  if (!r2) {
-    throw new ApiError('storage_unavailable', 503, 'Asset storage is not configured');
-  }
+  if (!r2) throw new ApiError('storage_unavailable', 503, 'Asset storage is not configured');
 
-  // 4. Atomically increment download count (guard against race)
+  // 4. Fetch object from R2
+  const object = await r2.get(variant.digital_asset_key);
+  if (!object) throw ApiError.notFound('Asset file not found in storage');
+
+  // 5. Atomically increment download count
   const incremented = await incrementDownloadCount(db, tokenRow.id, tokenRow.max_downloads);
   if (!incremented) {
     throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
   }
 
-  // 5. Generate presigned URL (valid for 5 minutes)
-  const presignedUrl = await r2.createPresignedUrl
-    ? (r2 as any).createPresignedUrl(variant.digital_asset_key, { expiresIn: 300 })
-    : null;
+  const downloadsRemaining = Math.max(0, tokenRow.max_downloads - tokenRow.download_count - 1);
+  const filename    = variant.digital_asset_key.split('/').pop() ?? 'download';
+  const contentType = object.httpMetadata?.contentType ?? 'application/octet-stream';
 
-  // Fallback: serve via public URL if presigned URLs aren't available
-  // (presigned URL support depends on the R2 binding configuration)
-  const downloadUrl = presignedUrl ?? `${c.env.IMAGES_URL}/${variant.digital_asset_key}`;
-
-  const downloadsRemaining = tokenRow.max_downloads - tokenRow.download_count - 1;
-
-  // If the client wants JSON (e.g. a frontend building a download page), return info
+  // If the client wants JSON, return metadata instead of the file
   const acceptsJson = c.req.header('Accept')?.includes('application/json');
   if (acceptsJson) {
     return c.json({
-      sku: tokenRow.sku,
-      order_id: tokenRow.order_id,
-      downloads_remaining: Math.max(0, downloadsRemaining),
-      expires_at: tokenRow.expires_at,
-      redirect_url: downloadUrl,
+      sku:                 tokenRow.sku,
+      order_id:            tokenRow.order_id,
+      downloads_remaining: downloadsRemaining,
+      expires_at:          tokenRow.expires_at,
+      redirect_url:        `${c.env.IMAGES_URL ?? ''}/${variant.digital_asset_key}`,
     }, 200);
   }
 
-  // Otherwise 302 redirect — the browser/app goes straight to the file
-  return c.redirect(downloadUrl, 302);
+  // Stream file directly to the client
+  return new Response(object.body, {
+    headers: {
+      'Content-Type':           contentType,
+      'Content-Disposition':    `attachment; filename="${filename}"`,
+      'Cache-Control':          'private, no-store',
+      'X-Downloads-Remaining':  String(downloadsRemaining),
+    },
+  });
 });
 
 export { app as downloads };

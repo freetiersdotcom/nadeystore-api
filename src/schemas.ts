@@ -222,8 +222,13 @@ export const CartResponse = z.object({
   stripe_checkout_session_id: z.string().nullable().optional(),
 }).openapi('Cart');
 
+/*export const CreateCartBody = z.object({
+  customer_email: z.string().email().openapi({ example: 'customer@example.com' }),
+}).openapi('CreateCart');*/
+
 export const CreateCartBody = z.object({
   customer_email: z.string().email().openapi({ example: 'customer@example.com' }),
+  currency: z.string().length(3).toUpperCase().default('XOF').openapi({ example: 'XOF' }),
 }).openapi('CreateCart');
 
 export const AddCartItemsBody = z.object({

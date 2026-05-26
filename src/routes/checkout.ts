@@ -18,8 +18,87 @@ import {
   CartTotals,
 } from '../schemas';
 
-import { prepareCheckout, setCartShipping } from '../lib/checkout';
+import { prepareCheckout, setCartShipping, SUPPORTED_CURRENCIES } from '../lib/checkout';
 import { createFedaPayCheckout } from '../lib/fedapay';
+
+async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
+  const allCartItems = await db.query<any>(
+    `SELECT * FROM cart_items WHERE cart_id = ?`, [cart.id]
+  );
+
+  const subtotalCents = allCartItems.reduce(
+    (sum: number, item: any) => sum + item.unit_price_cents * item.qty, 0
+  );
+
+  // Fetch product_type for each SKU in the cart
+  const skus = allCartItems.map((i: any) => i.sku);
+  const variants = skus.length > 0
+    ? await db.query<{ sku: string; product_type: string }>(
+        `SELECT sku, product_type FROM variants WHERE sku IN (${skus.map(() => '?').join(',')})`,
+        skus
+      )
+    : [];
+  const variantMap = new Map(variants.map(v => [v.sku, v.product_type ?? 'physical']));
+
+  let discountInfo = null;
+  let discountAmountCents = 0;
+
+  if (cart.discount_id) {
+    const [discount] = await db.query<any>(
+      `SELECT * FROM discounts WHERE id = ?`, [cart.discount_id]
+    );
+    if (discount) {
+      try {
+        await validateDiscount(db, discount as Discount, subtotalCents, cart.customer_email);
+        discountAmountCents = calculateDiscount(discount as Discount, subtotalCents);
+        await db.run(
+          `UPDATE carts SET discount_amount_cents = ? WHERE id = ?`,
+          [discountAmountCents, cart.id]
+        );
+        discountInfo = {
+          code:         discount.code,
+          type:         discount.type as 'percentage' | 'fixed_amount',
+          amount_cents: discountAmountCents,
+        };
+      } catch {
+        await db.run(
+          `UPDATE carts SET discount_code = NULL, discount_id = NULL,
+           discount_amount_cents = 0 WHERE id = ?`,
+          [cart.id]
+        );
+      }
+    } else {
+      await db.run(
+        `UPDATE carts SET discount_code = NULL, discount_id = NULL,
+         discount_amount_cents = 0 WHERE id = ?`,
+        [cart.id]
+      );
+    }
+  }
+
+  return {
+    id:             cart.id,
+    status:         cart.status,
+    currency:       cart.currency,
+    customer_email: cart.customer_email,
+    items: allCartItems.map((item: any) => ({
+      sku:              item.sku,
+      title:            item.title,
+      qty:              item.qty,
+      unit_price_cents: item.unit_price_cents,
+      product_type:     variantMap.get(item.sku) ?? 'physical',
+    })),
+    discount: discountInfo,
+    totals: {
+      subtotal_cents:  subtotalCents,
+      discount_cents:  discountAmountCents,
+      shipping_cents:  0,
+      tax_cents:       0,
+      total_cents:     subtotalCents - discountAmountCents,
+    },
+    expires_at: cart.expires_at,
+  };
+}
 
 const RemoveDiscountResponse = z.object({
   discount: z.null(),
@@ -46,25 +125,10 @@ app.openapi(getCart, async (c) => {
   const { cartId } = c.req.valid('param');
   const db = getDb(c.var.db);
 
-  const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ?`, [cartId]);
+  const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ? LIMIT 1`, [cartId]);
   if (!cart) throw ApiError.notFound('Cart not found');
 
-  const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
-
-  return c.json({
-    id: cart.id,
-    status: cart.status,
-    currency: cart.currency,
-    customer_email: cart.customer_email,
-    items: items.map((i) => ({
-      sku: i.sku,
-      title: i.title,
-      qty: i.qty,
-      unit_price_cents: i.unit_price_cents,
-    })),
-    expires_at: cart.expires_at,
-    stripe_checkout_session_id: cart.stripe_checkout_session_id,
-  }, 200);
+  return c.json(await buildCartResponse(db, cart), 200);
 });
 
 const createCart = createRoute({
@@ -80,7 +144,8 @@ const createCart = createRoute({
 });
 
 app.openapi(createCart, async (c) => {
-  const { customer_email } = c.req.valid('json');
+  //const { customer_email } = c.req.valid('json');
+  const { customer_email, currency } = c.req.valid('json');
 
   if (!isValidEmail(customer_email)) {
     throw ApiError.invalidRequest('A valid customer_email is required');
@@ -90,16 +155,21 @@ app.openapi(createCart, async (c) => {
   const id = uuid();
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
-  await db.run(`INSERT INTO carts (id, customer_email, expires_at) VALUES (?, ?, ?)`, [
+  /*await db.run(`INSERT INTO carts (id, customer_email, expires_at) VALUES (?, ?, ?)`, [
     id,
     customer_email,
     expiresAt,
-  ]);
+  ]);*/
+  
+  await db.run(
+    `INSERT INTO carts (id, customer_email, currency, expires_at) VALUES (?, ?, ?, ?)`,
+    [id, customer_email, currency, expiresAt]
+  );
 
   return c.json({
     id,
     status: 'open' as const,
-    currency: 'USD',
+    currency: currency,//'USD',
     customer_email,
     items: [],
     discount: null,
@@ -168,66 +238,85 @@ app.openapi(addCartItems, async (c) => {
     );
   }
 
-  const allCartItems = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
-  const subtotalCents = allCartItems.reduce(
-    (sum, item) => sum + item.unit_price_cents * item.qty,
-    0
-  );
+  return c.json(await buildCartResponse(db, cart), 200);
+});
 
-  let discountInfo = null;
-  let discountAmountCents = 0;
-  if (cart.discount_id) {
-    const [discount] = await db.query<any>(`SELECT * FROM discounts WHERE id = ?`, [
-      cart.discount_id,
-    ]);
-    if (discount) {
-      try {
-        await validateDiscount(db, discount as Discount, subtotalCents, cart.customer_email);
-        discountAmountCents = calculateDiscount(discount as Discount, subtotalCents);
-        await db.run(`UPDATE carts SET discount_amount_cents = ? WHERE id = ?`, [
-          discountAmountCents,
-          cartId,
-        ]);
-        discountInfo = {
-          code: discount.code,
-          type: discount.type as 'percentage' | 'fixed_amount',
-          amount_cents: discountAmountCents,
-        };
-      } catch {
-        await db.run(
-          `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-          [cartId]
-        );
-      }
-    } else {
-      await db.run(
-        `UPDATE carts SET discount_code = NULL, discount_id = NULL, discount_amount_cents = 0 WHERE id = ?`,
-        [cartId]
-      );
-    }
+const CartItemSkuParam = z.object({
+  cartId: z.string(),
+  sku:    z.string(),
+});
+
+const updateCartItem = createRoute({
+  method:  'patch',
+  path:    '/{cartId}/items/:sku',
+  tags:    ['Checkout'],
+  summary: 'Update item quantity in cart',
+  description: 'Sets the quantity of a specific SKU in the cart. Passing qty 0 removes the item.',
+  request: {
+    params: CartItemSkuParam,
+    body:   { content: { 'application/json': { schema: z.object({ qty: z.number().int().min(0) }) } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: CartResponse } }, description: 'Updated cart' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid request' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart or item not found' },
+    409: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart is not open' },
+  },
+});
+
+app.openapi(updateCartItem, async (c) => {
+  const { cartId, sku } = c.req.valid('param');
+  const { qty }         = c.req.valid('json');
+  const db = getDb(c.var.db);
+
+  const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ?`, [cartId]);
+  if (!cart) throw ApiError.notFound('Cart not found');
+  if (cart.status !== 'open') throw ApiError.conflict('Cart is not open');
+
+  const [existing] = await db.query<any>(
+    `SELECT * FROM cart_items WHERE cart_id = ? AND sku = ?`, [cartId, sku]
+  );
+  if (!existing) throw ApiError.notFound(`Item not found in cart: ${sku}`);
+
+  if (qty === 0) {
+    await db.run(`DELETE FROM cart_items WHERE cart_id = ? AND sku = ?`, [cartId, sku]);
+  } else {
+    await db.run(
+      `UPDATE cart_items SET qty = ? WHERE cart_id = ? AND sku = ?`,
+      [qty, cartId, sku]
+    );
   }
 
-  return c.json({
-    id: cart.id,
-    status: cart.status,
-    currency: cart.currency,
-    customer_email: cart.customer_email,
-    items: allCartItems.map((item) => ({
-      sku: item.sku,
-      title: item.title,
-      qty: item.qty,
-      unit_price_cents: item.unit_price_cents,
-    })),
-    discount: discountInfo,
-    totals: {
-      subtotal_cents: subtotalCents,
-      discount_cents: discountAmountCents,
-      shipping_cents: 0,
-      tax_cents: 0,
-      total_cents: subtotalCents - discountAmountCents,
-    },
-    expires_at: cart.expires_at,
-  }, 200);
+  return c.json(await buildCartResponse(db, cart), 200);
+});
+
+const removeCartItem = createRoute({
+  method:  'delete',
+  path:    '/{cartId}/items/:sku',
+  tags:    ['Checkout'],
+  summary: 'Remove item from cart',
+  request: { params: CartItemSkuParam },
+  responses: {
+    200: { content: { 'application/json': { schema: CartResponse } }, description: 'Updated cart' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart or item not found' },
+    409: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart is not open' },
+  },
+});
+
+app.openapi(removeCartItem, async (c) => {
+  const { cartId, sku } = c.req.valid('param');
+  const db = getDb(c.var.db);
+
+  const [cart] = await db.query<any>(`SELECT * FROM carts WHERE id = ?`, [cartId]);
+  if (!cart) throw ApiError.notFound('Cart not found');
+  if (cart.status !== 'open') throw ApiError.conflict('Cart is not open');
+
+  const result = await db.run(
+    `DELETE FROM cart_items WHERE cart_id = ? AND sku = ?`, [cartId, sku]
+  );
+  if (result.changes === 0) throw ApiError.notFound(`Item not found in cart: ${sku}`);
+
+  return c.json(await buildCartResponse(db, cart), 200);
 });
 
 const checkoutCart = createRoute({
@@ -400,7 +489,7 @@ const fedaPayCheckout = createRoute({
 });
 
 app.openapi(fedaPayCheckout, async (c) => {
-  const { cartId }    = c.req.valid('param');
+  const { cartId }      = c.req.valid('param');
   const { success_url } = c.req.valid('json');
   const db = getDb(c.var.db);
 
@@ -408,7 +497,6 @@ app.openapi(fedaPayCheckout, async (c) => {
   if (!config?.value) throw ApiError.invalidRequest('FedaPay not configured. POST /v1/setup/fedapay first.');
   const fedaPayConfig = JSON.parse(config.value);
 
-  // Shared pre-checkout (validates currency against FedaPay's supported list)
   const prepared = await prepareCheckout(db, cartId, 'fedapay');
 
   const description = prepared.items.map(i => i.title).join(', ').slice(0, 200);
@@ -429,6 +517,15 @@ app.openapi(fedaPayCheckout, async (c) => {
     throw ApiError.invalidRequest(`FedaPay checkout error: ${err.message}`);
   }
 
+  // Store transaction_id → cart_id mapping for webhook lookup
+  await db.run(
+    `INSERT INTO fedapay_transactions (transaction_id, cart_id, created_at)
+     VALUES (?, ?, ?)`,
+    [result.transaction_id, cartId, now()]
+  );
+  
+  console.log(`[fedapay] Mapped transaction ${result.transaction_id} → cart ${cartId}`);
+
   // Store discount amount on cart so the webhook handler can read it
   await db.run(
     `UPDATE carts SET discount_amount_cents = ?, updated_at = ? WHERE id = ?`,
@@ -441,6 +538,7 @@ app.openapi(fedaPayCheckout, async (c) => {
     cart_id:        cartId,
   }, 200);
 });
+
 
 const SetShippingBody = z.object({
   name:        z.string().optional().nullable(),
@@ -488,10 +586,62 @@ app.openapi(setShippingRoute, async (c) => {
   return c.json({ ok: true as const }, 200);
 });
 
+const SetCurrencyBody = z.object({
+  currency: z.enum(SUPPORTED_CURRENCIES).openapi({
+    example: 'XOF',
+    description: 'ISO 4217 currency code. Must be supported by at least one configured payment provider.',
+  }),
+}).openapi('SetCurrency');
+
+const SetCurrencyResponse = z.object({
+  currency: z.enum(SUPPORTED_CURRENCIES),
+}).openapi('SetCurrencyResponse');
+
+const setCurrencyRoute = createRoute({
+  method:  'patch',
+  path:    '/{cartId}/currency',
+  tags:    ['Checkout'],
+  summary: 'Set currency on cart',
+  description: [
+    'Sets the billing currency for this cart.',
+    'Currency must be supported by at least one available payment provider.',
+    'Note: prices stored in cart_items are not converted — this sets the currency',
+    'label passed to the payment provider. Multi-currency conversion is not yet supported.',
+    'Cart must be open.',
+  ].join(' '),
+  request: {
+    params: CartIdParam,
+    body:   { content: { 'application/json': { schema: SetCurrencyBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: SetCurrencyResponse } }, description: 'Currency updated' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid currency or cart not open' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart not found' },
+  },
+});
+
+app.openapi(setCurrencyRoute, async (c) => {
+  const { cartId }  = c.req.valid('param');
+  const { currency } = c.req.valid('json');
+  const db = getDb(c.var.db);
+
+  const [cart] = await db.query<{ status: string }>(
+    `SELECT status FROM carts WHERE id = ? LIMIT 1`, [cartId]
+  );
+  if (!cart) throw ApiError.notFound('Cart not found');
+  if (cart.status !== 'open') throw ApiError.invalidRequest('Cart is not open');
+
+  await db.run(
+    `UPDATE carts SET currency = ?, updated_at = ? WHERE id = ?`,
+    [currency, now(), cartId]
+  );
+
+  return c.json({ currency }, 200);
+});
 
 const applyDiscount = createRoute({
   method: 'post',
-  path: '/{cartId}/apply-discount',
+  path: '/{cartId}/discount', //previously '/{cartId}/apply-discount',
   tags: ['Checkout'],
   summary: 'Apply discount code to cart',
   request: {
@@ -534,21 +684,13 @@ app.openapi(applyDiscount, async (c) => {
     `UPDATE carts SET discount_code = ?, discount_id = ?, discount_amount_cents = ? WHERE id = ?`,
     [discount.code, discount.id, discountAmountCents, cartId]
   );
+  
+  // Re-fetch cart so buildCartResponse sees the updated discount fields
+  const [updatedCart] = await db.query<any>(
+    `SELECT * FROM carts WHERE id = ? LIMIT 1`, [cartId]
+  );
 
-  return c.json({
-    discount: {
-      code: discount.code,
-      type: discount.type as 'percentage' | 'fixed_amount',
-      amount_cents: discountAmountCents,
-    },
-    totals: {
-      subtotal_cents: subtotalCents,
-      discount_cents: discountAmountCents,
-      shipping_cents: 0,
-      tax_cents: 0,
-      total_cents: subtotalCents - discountAmountCents,
-    },
-  }, 200);
+  return c.json(await buildCartResponse(db, updatedCart), 200);
 });
 
 const removeDiscount = createRoute({
@@ -577,21 +719,12 @@ app.openapi(removeDiscount, async (c) => {
     [cartId]
   );
 
-  const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
-  const subtotalCents = items.reduce((sum: number, item: any) => {
-    return sum + item.unit_price_cents * item.qty;
-  }, 0);
+  const [updatedCart] = await db.query<any>(
+    `SELECT * FROM carts WHERE id = ? LIMIT 1`, [cartId]
+  );
 
-  return c.json({
-    discount: null,
-    totals: {
-      subtotal_cents: subtotalCents,
-      discount_cents: 0,
-      shipping_cents: 0,
-      tax_cents: 0,
-      total_cents: subtotalCents,
-    },
-  }, 200);
+  return c.json(await buildCartResponse(db, updatedCart), 200);
+  
 });
 
 export { app as checkout };

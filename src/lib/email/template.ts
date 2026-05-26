@@ -1,3 +1,5 @@
+import { et } from './i18n';
+
 // ============================================================
 // ORDER CONFIRMATION EMAIL TEMPLATE
 // ============================================================
@@ -45,6 +47,7 @@ export interface OrderConfirmationData {
   shipping_cents: number;
   total_cents: number;
   currency?: string;
+  locale?: string; // e.g. 'fr-FR', 'en-US' — defaults to 'fr-FR'
   /** Only present for physical/mixed orders */
   shipping_address?: TemplateShippingAddress | null;
   shipping_name?: string | null;
@@ -55,6 +58,20 @@ export interface OrderConfirmationData {
 // ============================================================
 // HELPERS
 // ============================================================
+
+const ZERO_DECIMAL_CURRENCIES = new Set(['XOF', 'GNF', 'JPY', 'KRW', 'VND']);
+
+function formatAmount(amount: number, currency = 'XOF', locale = 'fr-FR'): string {
+  const cur = (currency || 'XOF').toUpperCase();
+  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(cur);
+
+  return new Intl.NumberFormat(locale, {
+    style:                 'currency',
+    currency:              cur,
+    minimumFractionDigits: isZeroDecimal ? 0 : 2,
+    maximumFractionDigits: isZeroDecimal ? 0 : 2,
+  }).format(isZeroDecimal ? amount : amount / 100);
+}
 
 function cents(amount: number, currency = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
@@ -93,7 +110,7 @@ function renderShippingBlock(data: OrderConfirmationData): string {
     <tr>
       <td style="padding: 0 0 32px 0;">
         <h3 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #111; text-transform: uppercase; letter-spacing: 0.05em;">
-          Shipping Address
+		  ${et('section.shipping')}
         </h3>
         <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #444;">
           ${lines}
@@ -116,7 +133,7 @@ function renderDownloadsBlock(items: TemplateOrderItem[], baseUrl: string): stri
               <a href="${esc(baseUrl)}/downloads/${esc(item.download_token)}"
                  style="display: inline-block; padding: 8px 16px; background: #111; color: #fff;
                         text-decoration: none; font-size: 13px; border-radius: 4px;">
-                Download
+                ${et('downloads.button')}
               </a>
             </td>
           </tr>
@@ -128,10 +145,10 @@ function renderDownloadsBlock(items: TemplateOrderItem[], baseUrl: string): stri
     <tr>
       <td style="padding: 0 0 32px 0;">
         <h3 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #111; text-transform: uppercase; letter-spacing: 0.05em;">
-          Your Downloads
+          ${et('section.downloads')}
         </h3>
         <p style="margin: 0 0 16px 0; font-size: 14px; color: #666;">
-          Links expire in 7 days and can be used up to 5 times each.
+          ${et('downloads.expiry')}
         </p>
         <table width="100%" cellpadding="0" cellspacing="0">
           ${rows}
@@ -140,18 +157,18 @@ function renderDownloadsBlock(items: TemplateOrderItem[], baseUrl: string): stri
     </tr>`;
 }
 
-function renderItemsTable(items: TemplateOrderItem[], currency: string): string {
+function renderItemsTable(items: TemplateOrderItem[], currency: string, locale = 'fr-FR'): string {
   const rows = items.map(item => `
     <tr>
       <td style="padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; color: #111;">
         ${esc(item.title)}
-        ${item.product_type === 'digital' ? '<span style="display:inline-block;margin-left:6px;font-size:11px;color:#666;background:#f5f5f5;padding:1px 6px;border-radius:3px;">Digital</span>' : ''}
+        ${item.product_type === 'digital' ? '<span style="display:inline-block;margin-left:6px;font-size:11px;color:#666;background:#f5f5f5;padding:1px 6px;border-radius:3px;">'+et('summary.badge.digital')+'</span>' : ''}
       </td>
       <td style="padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; color: #666; text-align: center;">
         × ${item.qty}
       </td>
       <td style="padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; color: #111; text-align: right;">
-        ${cents(item.unit_price_cents * item.qty, currency)}
+        ${formatAmount(item.unit_price_cents * item.qty, currency, locale)}
       </td>
     </tr>`).join('');
 
@@ -159,9 +176,9 @@ function renderItemsTable(items: TemplateOrderItem[], currency: string): string 
     <table width="100%" cellpadding="0" cellspacing="0" style="border-top: 1px solid #f0f0f0;">
       <thead>
         <tr>
-          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: left; text-transform: uppercase; letter-spacing: 0.05em;">Item</th>
-          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;">Qty</th>
-          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: right; text-transform: uppercase; letter-spacing: 0.05em;">Price</th>
+          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: left; text-transform: uppercase; letter-spacing: 0.05em;">${et('summary.col.item')}</th>
+          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;">${et('summary.col.qty')}</th>
+          <th style="padding: 10px 0; font-size: 12px; color: #999; font-weight: 500; text-align: right; text-transform: uppercase; letter-spacing: 0.05em;">${et('summary.col.price')}</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -174,44 +191,44 @@ function renderTotals(data: OrderConfirmationData): string {
 
   rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">Subtotal</td>
-      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${cents(data.subtotal_cents, cur)}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${et('totals.subtotal')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${formatAmount(data.subtotal_cents, cur, data.locale ?? 'fr-FR')}</td>
     </tr>`);
 
   if (data.discount && data.discount.amount_cents > 0) {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #22863a;">Discount (${esc(data.discount.code)})</td>
-      <td style="padding: 8px 0; font-size: 14px; color: #22863a; text-align: right;">−${cents(data.discount.amount_cents, cur)}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #22863a;">${et('totals.discount')} (${esc(data.discount.code)})</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #22863a; text-align: right;">−${formatAmount(data.discount.amount_cents, cur, data.locale ?? 'fr-FR')}</td>
     </tr>`);
   }
 
   if (data.shipping_cents > 0) {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">Shipping</td>
-      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${cents(data.shipping_cents, cur)}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${et('totals.shipping')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${formatAmount(data.shipping_cents, cur, data.locale ?? 'fr-FR')}</td>
     </tr>`);
   } else {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">Shipping</td>
-      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">Free</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${et('totals.shipping')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${et('totals.shipping.free')}</td>
     </tr>`);
   }
 
   if (data.tax_cents > 0) {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">Tax</td>
-      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${cents(data.tax_cents, cur)}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${et('totals.tax')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${formatAmount(data.tax_cents, cur, data.locale ?? 'fr-FR')}</td>
     </tr>`);
   }
 
   rows.push(`
     <tr style="border-top: 2px solid #111;">
-      <td style="padding: 14px 0 0 0; font-size: 16px; font-weight: 700; color: #111;">Total</td>
-      <td style="padding: 14px 0 0 0; font-size: 16px; font-weight: 700; color: #111; text-align: right;">${cents(data.total_cents, cur)}</td>
+      <td style="padding: 14px 0 0 0; font-size: 16px; font-weight: 700; color: #111;">${et('totals.total')}</td>
+      <td style="padding: 14px 0 0 0; font-size: 16px; font-weight: 700; color: #111; text-align: right;">${formatAmount(data.total_cents, cur, data.locale ?? 'fr-FR')}</td>
     </tr>`);
 
   return `<table width="100%" cellpadding="0" cellspacing="0">${rows.join('')}</table>`;
@@ -230,7 +247,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Order Confirmation — ${esc(data.order_number)}</title>
+  <title>${et('doc.title')} — ${esc(data.order_number)}</title>
 </head>
 <body style="margin: 0; padding: 0; background: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background: #f5f5f5; padding: 40px 20px;">
@@ -254,13 +271,13 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 <tr>
                   <td style="padding: 0 0 32px 0;">
                     <h2 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; color: #111;">
-                      Order confirmed ✓
+                      ${et('header.confirmed')}
                     </h2>
                     <p style="margin: 0; font-size: 15px; color: #666;">
-                      Hi ${esc(data.customer_email)}, thanks for your order!
+                      ${et('header.hi')} ${esc(data.customer_email)}, ${et('header.thanks')}
                     </p>
                     <p style="margin: 8px 0 0 0; font-size: 14px; color: #999;">
-                      Order <strong style="color: #111;">${esc(data.order_number)}</strong>
+                      ${et('header.orderLabel')} <strong style="color: #111;">${esc(data.order_number)}</strong>
                     </p>
                   </td>
                 </tr>
@@ -275,7 +292,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 <tr>
                   <td style="padding: 0 0 24px 0;">
                     <h3 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: #111; text-transform: uppercase; letter-spacing: 0.05em;">
-                      Order Summary
+                      ${et('section.summary')}
                     </h3>
                     ${renderItemsTable(data.items, data.currency ?? 'USD')}
                   </td>
@@ -292,9 +309,9 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 <tr>
                   <td style="padding: 24px 0 0 0; border-top: 1px solid #f0f0f0;">
                     <p style="margin: 0; font-size: 13px; color: #999; line-height: 1.6;">
-                      Questions? Reply to this email or contact us at
+                      ${et('footer.questions')}
                       <a href="mailto:${esc(data.customer_email)}" style="color: #666;">${esc(data.store_name)}</a>.
-                      ${hasDigital ? ' Your download links expire in 7 days.' : ''}
+                      ${hasDigital ? et('footer.downloads.expiry') : ''}
                     </p>
                   </td>
                 </tr>
@@ -313,28 +330,28 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
   // Plain text fallback
   const cur = data.currency ?? 'USD';
   const itemLines = data.items.map(i =>
-    `  ${i.title} × ${i.qty}  ${cents(i.unit_price_cents * i.qty, cur)}` +
+    `  ${i.title} × ${i.qty}  ${formatAmount(i.unit_price_cents * i.qty, cur, data.locale ?? 'fr-FR')}` +
     (i.product_type === 'digital' && i.download_token
-      ? `\n  Download: ${data.store_base_url}/downloads/${i.download_token}`
+      ? `\n  ${et('text.download')} ${data.store_base_url}/downloads/${i.download_token}`
       : '')
   ).join('\n');
 
   const text = [
-    `${data.store_name} — Order Confirmation`,
-    `Order ${data.order_number}`,
+    `${data.store_name} — ${et('text.title')}`,
+    `${et('text.orderLabel')} ${data.order_number}`,
     '',
-    `Hi ${data.customer_email}, thanks for your order!`,
+    `Hi ${data.customer_email}, ${et('text.thanks')}`,
     '',
-    '--- Items ---',
+    et('text.items'),
     itemLines,
     '',
-    '--- Totals ---',
-    `Subtotal: ${cents(data.subtotal_cents, cur)}`,
-    data.discount?.amount_cents ? `Discount (${data.discount.code}): -${cents(data.discount.amount_cents, cur)}` : '',
-    `Shipping: ${data.shipping_cents > 0 ? cents(data.shipping_cents, cur) : 'Free'}`,
-    data.tax_cents > 0 ? `Tax: ${cents(data.tax_cents, cur)}` : '',
-    `Total: ${cents(data.total_cents, cur)}`,
-    hasDigital ? '\nDownload links expire in 7 days and can be used up to 5 times.' : '',
+    et('text.totals'),
+    `${et('text.subtotal')}: ${formatAmount(data.subtotal_cents, cur, data.locale ?? 'fr-FR')}`,
+    data.discount?.amount_cents ? `${et('text.discount')} (${data.discount.code}): -${formatAmount(data.discount.amount_cents, cur, data.locale ?? 'fr-FR')}` : '',
+    `${et('text.shipping')} ${data.shipping_cents > 0 ? formatAmount(data.shipping_cents, cur, data.locale ?? 'fr-FR') : et('text.shipping.free')}`,
+    data.tax_cents > 0 ? `${et('text.tax')} ${formatAmount(data.tax_cents, cur, data.locale ?? 'fr-FR')}` : '',
+    `${et('text.total')} ${formatAmount(data.total_cents, cur, data.locale ?? 'fr-FR')}`,
+    hasDigital ? et('text.download.expiry') : '',
   ].filter(l => l !== null && l !== undefined).join('\n').trim();
 
   return { html, text };

@@ -14,23 +14,25 @@ import {
 } from 'lucide-react';
 import { api, Webhook, WebhookDetail } from '../lib/api';
 import { Modal } from '../components/Modal';
+import { useT } from '../lib/locale-context';
+import clsx from 'clsx';
 
+// Event labels and descriptions remain in English as they are technical API identifiers.
+// See i18n-notes.md for the recommended fix.
 const WEBHOOK_EVENTS = [
-  { value: 'order.created', label: 'Order Created', description: 'When a new order is placed' },
-  { value: 'order.updated', label: 'Order Updated', description: 'When order status changes' },
-  { value: 'order.shipped', label: 'Order Shipped', description: 'When order is marked shipped' },
-  { value: 'order.refunded', label: 'Order Refunded', description: 'When order is refunded' },
-  {
-    value: 'inventory.low',
-    label: 'Low Inventory',
-    description: 'When stock drops below threshold',
-  },
-  { value: 'order.*', label: 'All Order Events', description: 'Subscribe to all order events' },
-  { value: '*', label: 'All Events', description: 'Subscribe to everything' },
+  { value: 'order.created',  label: 'Order Created',    description: 'When a new order is placed' },
+  { value: 'order.updated',  label: 'Order Updated',    description: 'When order status changes' },
+  { value: 'order.shipped',  label: 'Order Shipped',    description: 'When order is marked shipped' },
+  { value: 'order.refunded', label: 'Order Refunded',   description: 'When order is refunded' },
+  { value: 'inventory.low',  label: 'Low Inventory',    description: 'When stock drops below threshold' },
+  { value: 'order.*',        label: 'All Order Events', description: 'Subscribe to all order events' },
+  { value: '*',              label: 'All Events',       description: 'Subscribe to everything' },
 ] as const;
 
 export function Webhooks() {
   const queryClient = useQueryClient();
+  const t = useT();
+
   const [createModal, setCreateModal] = useState(false);
   const [selectedWebhook, setSelectedWebhook] = useState<string | null>(null);
   const [newSecret, setNewSecret] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export function Webhooks() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4 h-9">
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-          Webhooks
+          {t('webhooks.title')}
         </h1>
         <div className="flex items-center gap-2">
           <button
@@ -133,7 +135,7 @@ export function Webhooks() {
             style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
           >
             <Plus size={16} />
-            Add Webhook
+            {t('webhooks.new')}
           </button>
         </div>
       </div>
@@ -150,10 +152,10 @@ export function Webhooks() {
         ) : webhooks.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              No webhooks configured
+              {t('webhooks.empty')}
             </p>
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-              Add a webhook to receive event notifications
+              {t('webhooks.emptyHint')}
             </p>
           </div>
         ) : (
@@ -187,7 +189,7 @@ export function Webhooks() {
                         : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
                     )}
                   >
-                    {webhook.status}
+                    {webhook.status === 'active' ? t('common.active') : t('common.inactive')}
                   </span>
                 </div>
               </div>
@@ -197,20 +199,25 @@ export function Webhooks() {
       </div>
 
       {/* Create Modal */}
-      <Modal open={createModal} onClose={() => setCreateModal(false)} title="New Webhook" size="md">
+      <Modal
+        open={createModal}
+        onClose={() => setCreateModal(false)}
+        title={t('webhooks.new')}
+        size="md"
+      >
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
             <label
               className="block text-xs font-medium uppercase tracking-wide mb-2"
               style={{ color: 'var(--text-secondary)' }}
             >
-              Endpoint URL
+              {t('webhooks.form.url')}
             </label>
             <input
               type="url"
               value={newUrl}
               onChange={(e) => setNewUrl(e.target.value)}
-              placeholder="https://your-server.com/webhook"
+              placeholder={t('webhooks.form.urlPlaceholder')}
               required
               className="w-full px-3 py-2 text-sm font-mono rounded-lg focus:outline-none focus:ring-2"
               style={{
@@ -226,7 +233,7 @@ export function Webhooks() {
               className="block text-xs font-medium uppercase tracking-wide mb-2"
               style={{ color: 'var(--text-secondary)' }}
             >
-              Events
+              {t('webhooks.form.events')}
             </label>
             <div
               className="space-y-2 max-h-48 overflow-y-auto p-3 rounded-lg"
@@ -264,7 +271,7 @@ export function Webhooks() {
               className="px-4 py-2 text-sm font-medium"
               style={{ color: 'var(--text-muted)' }}
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
@@ -272,18 +279,23 @@ export function Webhooks() {
               className="px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-50"
               style={{ background: 'var(--accent)', color: 'white' }}
             >
-              {createMutation.isPending ? 'Creating...' : 'Create Webhook'}
+              {createMutation.isPending ? t('common.creating') : t('webhooks.form.submit')}
             </button>
           </div>
         </form>
       </Modal>
 
       {/* Secret Display Modal */}
-      <Modal open={!!newSecret} onClose={() => setNewSecret(null)} title="Webhook Secret" size="sm">
+      <Modal
+        open={!!newSecret}
+        onClose={() => setNewSecret(null)}
+        title={t('webhooks.secret.title')}
+        size="sm"
+      >
         <div className="space-y-4">
           <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
             <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-              Save this secret — it won't be shown again
+              {t('webhooks.secret.save')}
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 font-mono text-xs break-all">{newSecret}</code>
@@ -297,15 +309,14 @@ export function Webhooks() {
             </div>
           </div>
           <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-            Use this secret to verify webhook signatures. Each delivery includes an{' '}
-            <code className="text-xs">X-Merchant-Signature</code> header.
+            {t('webhooks.secret.hint')}
           </p>
           <button
             onClick={() => setNewSecret(null)}
             className="w-full px-4 py-2 text-sm font-semibold rounded-lg"
             style={{ background: 'var(--accent)', color: 'white' }}
           >
-            Done
+            {t('common.done')}
           </button>
         </div>
       </Modal>
@@ -314,7 +325,7 @@ export function Webhooks() {
       <Modal
         open={!!selectedWebhook}
         onClose={() => setSelectedWebhook(null)}
-        title="Webhook Details"
+        title={t('webhooks.detail.title')}
         size="lg"
       >
         {webhookDetail && (
@@ -325,7 +336,7 @@ export function Webhooks() {
                 className="text-xs font-medium uppercase tracking-wide mb-2"
                 style={{ color: 'var(--text-secondary)' }}
               >
-                Endpoint
+                {t('webhooks.detail.endpoint')}
               </h4>
               <p className="font-mono text-sm break-all">{webhookDetail.url}</p>
               <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -333,7 +344,7 @@ export function Webhooks() {
                   className="text-xs font-medium uppercase tracking-wide mb-2"
                   style={{ color: 'var(--text-secondary)' }}
                 >
-                  Status
+                  {t('webhooks.detail.status')}
                 </h4>
                 <select
                   value={webhookDetail.status}
@@ -351,8 +362,8 @@ export function Webhooks() {
                     color: 'var(--text)',
                   }}
                 >
-                  <option value="active">active</option>
-                  <option value="disabled">disabled</option>
+                  <option value="active">{t('common.active')}</option>
+                  <option value="disabled">{t('common.inactive')}</option>
                 </select>
               </div>
             </div>
@@ -363,7 +374,7 @@ export function Webhooks() {
                 className="text-xs font-medium uppercase tracking-wide mb-2"
                 style={{ color: 'var(--text-secondary)' }}
               >
-                Subscribed Events
+                {t('webhooks.detail.events')}
               </h4>
               <div className="flex flex-wrap gap-2">
                 {webhookDetail.events.map((event) => (
@@ -387,11 +398,11 @@ export function Webhooks() {
                 className="text-xs font-medium uppercase tracking-wide mb-3"
                 style={{ color: 'var(--text-secondary)' }}
               >
-                Recent Deliveries
+                {t('webhooks.detail.deliveries')}
               </h4>
               {webhookDetail.recent_deliveries.length === 0 ? (
                 <p className="text-sm font-mono" style={{ color: 'var(--text-secondary)' }}>
-                  No deliveries yet
+                  {t('webhooks.detail.noDeliveries')}
                 </p>
               ) : (
                 <div className="space-y-2">
@@ -416,7 +427,10 @@ export function Webhooks() {
                       <div className="text-right">
                         <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                           {delivery.response_code && `${delivery.response_code} · `}
-                          {delivery.attempts} attempt{delivery.attempts !== 1 ? 's' : ''}
+                          {delivery.attempts}{' '}
+                          {delivery.attempts !== 1
+                            ? t('webhooks.detail.attemptsPlural')
+                            : t('webhooks.detail.attempts')}
                         </span>
                         <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                           {new Date(delivery.created_at).toLocaleString()}
@@ -434,12 +448,12 @@ export function Webhooks() {
               style={{ borderColor: 'var(--border)' }}
             >
               <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                Created {new Date(webhookDetail.created_at).toLocaleString()}
+                {t('common.createdAt')} {new Date(webhookDetail.created_at).toLocaleString()}
               </p>
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => {
-                    if (confirm('This will invalidate the current secret. Continue?')) {
+                    if (confirm(t('webhooks.detail.rotateConfirm'))) {
                       rotateSecretMutation.mutate(webhookDetail.id);
                     }
                   }}
@@ -448,11 +462,13 @@ export function Webhooks() {
                   style={{ color: 'var(--text-muted)' }}
                 >
                   <RotateCw size={14} />
-                  {rotateSecretMutation.isPending ? 'Rotating...' : 'Rotate Secret'}
+                  {rotateSecretMutation.isPending
+                    ? t('common.rotating')
+                    : t('webhooks.detail.rotateSecret')}
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm('Delete this webhook? This cannot be undone.')) {
+                    if (confirm(t('webhooks.detail.deleteConfirm'))) {
                       deleteMutation.mutate(webhookDetail.id);
                     }
                   }}
@@ -460,7 +476,7 @@ export function Webhooks() {
                   className="inline-flex items-center gap-1.5 text-sm font-medium text-red-500 hover:text-red-600"
                 >
                   <Trash2 size={14} />
-                  {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                  {deleteMutation.isPending ? t('common.deleting') : t('webhooks.detail.delete')}
                 </button>
               </div>
             </div>

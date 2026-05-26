@@ -10,10 +10,45 @@ import {
   PanelLeft,
   Webhook,
   Users,
+  Tag,
+  Download,
+  Settings,
+  Languages,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useLocale, useT } from '../lib/locale-context';
 
-type Page = 'orders' | 'customers' | 'inventory' | 'products' | 'webhooks';
+export type Page =
+  | 'orders'
+  | 'customers'
+  | 'inventory'
+  | 'products'
+  | 'discounts'
+  | 'downloads'
+  | 'webhooks'
+  | 'setup/payments'
+  | 'setup/email';
+
+// navItems is now a function that takes t() so labels are always reactive to locale changes.
+// The icon and agencyOnly flag are stable; only label needs translation.
+type NavItemDef = {
+  id: Page;
+  labelKey: Parameters<ReturnType<typeof useT>>[0];
+  icon: typeof ClipboardList;
+  agencyOnly?: boolean;
+};
+
+const NAV_ITEM_DEFS: NavItemDef[] = [
+  { id: 'orders',          labelKey: 'nav.orders',    icon: ClipboardList },
+  { id: 'customers',       labelKey: 'nav.customers', icon: Users },
+  { id: 'inventory',       labelKey: 'nav.inventory', icon: Boxes },
+  { id: 'products',        labelKey: 'nav.products',  icon: Package },
+  { id: 'discounts',       labelKey: 'nav.discounts', icon: Tag },
+  { id: 'downloads',       labelKey: 'nav.downloads', icon: Download },
+  { id: 'webhooks',        labelKey: 'nav.webhooks',  icon: Webhook,   agencyOnly: true },
+  { id: 'setup/payments',  labelKey: 'nav.payments',  icon: Settings,  agencyOnly: true },
+  { id: 'setup/email',     labelKey: 'nav.email',     icon: Settings,  agencyOnly: true },
+];
 
 type LayoutProps = {
   children: ReactNode;
@@ -22,15 +57,8 @@ type LayoutProps = {
   onLogout: () => void;
   theme: 'light' | 'dark';
   onThemeToggle: () => void;
+  isAgency: boolean;
 };
-
-const navItems: { id: Page; label: string; icon: typeof ClipboardList }[] = [
-  { id: 'orders', label: 'Orders', icon: ClipboardList },
-  { id: 'customers', label: 'Customers', icon: Users },
-  { id: 'inventory', label: 'Inventory', icon: Boxes },
-  { id: 'products', label: 'Products', icon: Package },
-  { id: 'webhooks', label: 'Webhooks', icon: Webhook },
-];
 
 export function Layout({
   children,
@@ -39,7 +67,11 @@ export function Layout({
   onLogout,
   theme,
   onThemeToggle,
+  isAgency,
 }: LayoutProps) {
+  const t = useT();
+  const { locale, toggleLocale } = useLocale();
+
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem('sidebar_collapsed') === 'true'
   );
@@ -49,6 +81,15 @@ export function Layout({
     setCollapsed(newState);
     localStorage.setItem('sidebar_collapsed', String(newState));
   };
+
+  const visibleItems = NAV_ITEM_DEFS.filter((item) => !item.agencyOnly || isAgency);
+
+  const standardItems = visibleItems.filter(
+    (item) => item.id !== 'setup/payments' && item.id !== 'setup/email'
+  );
+  const setupItems = visibleItems.filter(
+    (item) => item.id === 'setup/payments' || item.id === 'setup/email'
+  );
 
   return (
     <div className="min-h-screen flex">
@@ -82,35 +123,67 @@ export function Layout({
           </svg>
           {!collapsed && (
             <span className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-              Admin
+              merchant
             </span>
           )}
         </div>
 
-        {/* Nav items */}
-        <div className="space-y-0.5">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button
+        {/* Standard nav items */}
+        <div className="space-y-0.5 flex-1">
+          {standardItems.map(({ id, labelKey, icon: Icon }) => (
+            <NavButton
               key={id}
+              id={id}
+              label={t(labelKey)}
+              Icon={Icon}
+              active={currentPage === id}
+              collapsed={collapsed}
               onClick={() => onNavigate(id)}
-              className={clsx(
-                'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-sm transition-colors',
-                currentPage === id ? 'font-medium' : 'hover:bg-[var(--bg-hover)]'
-              )}
-              style={{
-                color: currentPage === id ? 'var(--sidebar-active-text)' : 'var(--sidebar-text)',
-                background: currentPage === id ? 'var(--sidebar-active-bg)' : undefined,
-              }}
-            >
-              <Icon size={16} className="flex-shrink-0 opacity-60" />
-              {!collapsed && <span>{label}</span>}
-            </button>
+            />
           ))}
+
+          {/* Setup section — agency only */}
+          {setupItems.length > 0 && (
+            <>
+              <div
+                className={clsx(
+                  'pt-3 pb-1',
+                  collapsed ? 'px-0' : 'px-2.5'
+                )}
+              >
+                {!collapsed && (
+                  <span
+                    className="text-[10px] font-medium uppercase tracking-widest"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    {t('nav.setup')}
+                  </span>
+                )}
+                {collapsed && (
+                  <div
+                    className="h-px w-full"
+                    style={{ background: 'var(--sidebar-border)' }}
+                  />
+                )}
+              </div>
+              {setupItems.map(({ id, labelKey, icon: Icon }) => (
+                <NavButton
+                  key={id}
+                  id={id}
+                  label={t(labelKey)}
+                  Icon={Icon}
+                  active={currentPage === id}
+                  collapsed={collapsed}
+                  onClick={() => onNavigate(id)}
+                />
+              ))}
+            </>
+          )}
         </div>
 
         {/* Footer */}
         <div
-          className="mt-auto pt-3 space-y-0.5 border-t"
+          className="pt-3 space-y-0.5 border-t"
           style={{ borderColor: 'var(--sidebar-border)' }}
         >
           <button
@@ -123,7 +196,18 @@ export function Layout({
             ) : (
               <Moon size={16} className="flex-shrink-0 opacity-60" />
             )}
-            {!collapsed && <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>}
+            {!collapsed && (
+              <span>{theme === 'dark' ? t('nav.lightMode') : t('nav.darkMode')}</span>
+            )}
+          </button>
+          <button
+            onClick={toggleLocale}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-sm transition-colors hover:bg-[var(--bg-hover)]"
+            style={{ color: 'var(--sidebar-text)' }}
+            title={t('nav.switchLang')}
+          >
+            <Languages size={16} className="flex-shrink-0 opacity-60" />
+            {!collapsed && <span>{t('nav.switchLang')}</span>}
           </button>
           <button
             onClick={onLogout}
@@ -131,7 +215,7 @@ export function Layout({
             style={{ color: 'var(--sidebar-text)' }}
           >
             <LogOut size={16} className="flex-shrink-0 opacity-60" />
-            {!collapsed && <span>Disconnect</span>}
+            {!collapsed && <span>{t('nav.signout')}</span>}
           </button>
         </div>
       </nav>
@@ -141,5 +225,39 @@ export function Layout({
         <div className="p-6">{children}</div>
       </main>
     </div>
+  );
+}
+
+function NavButton({
+  id,
+  label,
+  Icon,
+  active,
+  collapsed,
+  onClick,
+}: {
+  id: Page;
+  label: string;
+  Icon: typeof ClipboardList;
+  active: boolean;
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={collapsed ? label : undefined}
+      className={clsx(
+        'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-sm transition-colors',
+        active ? 'font-medium' : 'hover:bg-[var(--bg-hover)]'
+      )}
+      style={{
+        color: active ? 'var(--sidebar-active-text)' : 'var(--sidebar-text)',
+        background: active ? 'var(--sidebar-active-bg)' : undefined,
+      }}
+    >
+      <Icon size={16} className="flex-shrink-0 opacity-60" />
+      {!collapsed && <span>{label}</span>}
+    </button>
   );
 }

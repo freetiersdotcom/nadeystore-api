@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import { z } from '@hono/zod-openapi';
 import Stripe from 'stripe';
 import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
@@ -83,8 +84,26 @@ app.openapi(listOrders, async (c) => {
       itemsByOrder[item.order_id].push(item);
     }
   }
+  
+  // After the itemsByOrder loop, add:
+  const allSkus = [...new Set(
+    Object.values(itemsByOrder).flat().map((i: any) => i.sku)
+  )];
+  const variantTypeMap = new Map<string, string>();
+  if (allSkus.length > 0) {
+    const variantRows = await db.query<{ sku: string; product_type: string }>(
+      `SELECT sku, product_type FROM variants WHERE sku IN (${allSkus.map(() => '?').join(',')})`,
+      allSkus
+    );
+    for (const v of variantRows) variantTypeMap.set(v.sku, v.product_type ?? 'physical');
+  }
 
-  const items = orderList.map((order) => formatOrder(order, itemsByOrder[order.id] || []));
+  // Then update the items map call:
+  const items = orderList.map((order) =>
+    formatOrder(order, itemsByOrder[order.id] || [], variantTypeMap)
+  );  
+
+  
   const nextCursor = hasMore && items.length > 0 ? items[items.length - 1].created_at : null;
 
   return c.json({ items, pagination: { has_more: hasMore, next_cursor: nextCursor } }, 200);
@@ -111,9 +130,20 @@ app.openapi(getOrder, async (c) => {
   const [order] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
   if (!order) throw ApiError.notFound('Order not found');
 
-  const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [order.id]);
+  const orderItems = await db.query<any>(
+    `SELECT * FROM order_items WHERE order_id = ?`, [order.id]
+  );
 
-  return c.json(formatOrder(order, orderItems), 200);
+  const skus = orderItems.map((i: any) => i.sku);
+  const variants = skus.length > 0
+    ? await db.query<{ sku: string; product_type: string }>(
+        `SELECT sku, product_type FROM variants WHERE sku IN (${skus.map(() => '?').join(',')})`,
+        skus
+      )
+    : [];
+  const variantTypes = new Map(variants.map(v => [v.sku, v.product_type ?? 'physical']));
+
+  return c.json(formatOrder(order, orderItems, variantTypes), 200);
 });
 
 const updateOrder = createRoute({
@@ -433,7 +463,7 @@ app.openapi(createTestOrder, async (c) => {
   return c.json(formatOrder(order, orderItems), 200);
 });
 
-function formatOrder(order: any, items: any[]) {
+function formatOrder(order: any, items: any[], variantTypes?: Map<string, string>) {
   return {
     id: order.id,
     number: order.number,
@@ -446,33 +476,185 @@ function formatOrder(order: any, items: any[]) {
       address: order.ship_to ? JSON.parse(order.ship_to) : null,
     },
     amounts: {
-      subtotal_cents: order.subtotal_cents,
-      discount_cents: order.discount_amount_cents || 0,
-      tax_cents: order.tax_cents,
-      shipping_cents: order.shipping_cents,
-      total_cents: order.total_cents,
-      currency: order.currency,
+      subtotal_cents:  order.subtotal_cents,
+      discount_cents:  order.discount_amount_cents || 0,
+      tax_cents:       order.tax_cents,
+      shipping_cents:  order.shipping_cents,
+      total_cents:     order.total_cents,
+      currency:        order.currency,
     },
     discount: order.discount_code
       ? { code: order.discount_code, amount_cents: order.discount_amount_cents || 0 }
       : null,
     tracking: {
-      number: order.tracking_number,
-      url: order.tracking_url,
+      number:     order.tracking_number,
+      url:        order.tracking_url,
       shipped_at: order.shipped_at,
     },
     stripe: {
       checkout_session_id: order.stripe_checkout_session_id,
-      payment_intent_id: order.stripe_payment_intent_id,
+      payment_intent_id:   order.stripe_payment_intent_id,
     },
     items: items.map((i) => ({
-      sku: i.sku,
-      title: i.title,
-      qty: i.qty,
+      sku:             i.sku,
+      title:           i.title,
+      qty:             i.qty,
       unit_price_cents: i.unit_price_cents,
+      product_type:    variantTypes?.get(i.sku) ?? 'physical',
     })),
     created_at: order.created_at,
   };
 }
+
+// ── GET /v1/orders/:orderId/downloads ─────────────────────────────────────
+
+const getOrderDownloads = createRoute({
+  method: 'get',
+  path: '/{orderId}/downloads',
+  tags: ['Orders'],
+  summary: 'Get download tokens for an order',
+  security: [{ bearerAuth: [] }],
+  middleware: [adminOnly] as const,
+  request: { params: OrderIdParam },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            order_id: z.string(),
+            digital_items: z.array(z.object({
+              sku:    z.string(),
+              title:  z.string(),
+              tokens: z.array(z.object({
+                token_id:           z.string(),
+                download_count:     z.number().int(),
+                max_downloads:      z.number().int(),
+                expires_at:         z.string(),
+                last_downloaded_at: z.string().nullable(),
+              })),
+            })),
+          }),
+        },
+      },
+      description: 'Download tokens grouped by SKU',
+    },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Order not found' },
+  },
+});
+
+app.openapi(getOrderDownloads, async (c) => {
+  const { orderId } = c.req.valid('param');
+  const db = getDb(c.var.db);
+
+  const [order] = await db.query<any>(`SELECT id FROM orders WHERE id = ?`, [orderId]);
+  if (!order) throw ApiError.notFound('Order not found');
+
+  const orderItems = await db.query<any>(
+    `SELECT oi.sku, oi.title, v.product_type
+     FROM order_items oi
+     LEFT JOIN variants v ON v.sku = oi.sku
+     WHERE oi.order_id = ?`,
+    [orderId]
+  );
+
+  const digitalItems = orderItems.filter(
+    (i: any) => (i.product_type ?? 'physical') === 'digital'
+  );
+
+  const result = await Promise.all(
+    digitalItems.map(async (item: any) => {
+      const tokens = await db.query<any>(
+        `SELECT id, download_count, max_downloads, expires_at, last_downloaded_at
+         FROM download_tokens
+         WHERE order_id = ? AND sku = ?
+         ORDER BY expires_at DESC`,
+        [orderId, item.sku]
+      );
+
+      return {
+        sku:   item.sku,
+        title: item.title,
+        tokens: tokens.map((t: any) => ({
+          token_id:           t.id,
+          download_count:     t.download_count,
+          max_downloads:      t.max_downloads,
+          expires_at:         t.expires_at,
+          last_downloaded_at: t.last_downloaded_at ?? null,
+        })),
+      };
+    })
+  );
+
+  return c.json({ order_id: orderId, digital_items: result }, 200);
+});
+
+// ── POST /v1/orders/:orderId/downloads/:sku/reissue ───────────────────────
+
+const ReissueParam = z.object({
+  orderId: z.string(),
+  sku:     z.string(),
+});
+
+const reissueDownload = createRoute({
+  method: 'post',
+  path: '/{orderId}/downloads/{sku}/reissue',
+  tags: ['Orders'],
+  summary: 'Reissue a download token for a digital item',
+  security: [{ bearerAuth: [] }],
+  middleware: [adminOnly] as const,
+  request: { params: ReissueParam },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            token:        z.string(),
+            download_url: z.string(),
+            expires_at:   z.string(),
+          }),
+        },
+      },
+      description: 'New download token issued',
+    },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Order or item not found' },
+  },
+});
+
+app.openapi(reissueDownload, async (c) => {
+  const { orderId, sku } = c.req.valid('param');
+  const db = getDb(c.var.db);
+
+  const [order] = await db.query<any>(`SELECT id FROM orders WHERE id = ?`, [orderId]);
+  if (!order) throw ApiError.notFound('Order not found');
+
+  const [item] = await db.query<any>(
+    `SELECT oi.sku FROM order_items oi
+     JOIN variants v ON v.sku = oi.sku
+     WHERE oi.order_id = ? AND oi.sku = ? AND v.product_type = 'digital'`,
+    [orderId, sku]
+  );
+  if (!item) throw ApiError.notFound('Digital item not found in order');
+
+  // Generate a fresh token using the same utility as order creation
+  const { generateToken, hashToken, DOWNLOAD_DEFAULTS } = await import('../lib/downloads');
+
+  const plainToken  = generateToken();
+  const tokenHash   = await hashToken(plainToken);
+  const expiresAt   = new Date(
+    Date.now() + DOWNLOAD_DEFAULTS.expires_in_days * 86_400_000
+  ).toISOString();
+
+  await db.run(
+    `INSERT INTO download_tokens (id, order_id, sku, token_hash, expires_at, max_downloads, download_count)
+     VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    [uuid(), orderId, sku, tokenHash, expiresAt, DOWNLOAD_DEFAULTS.max_downloads]
+  );
+
+  // Build the download URL — read STORE_URL from env if available
+  const storeBaseUrl = (c.env as any).STORE_URL ?? 'http://localhost:8787';
+  const downloadUrl  = `${storeBaseUrl}/v1/downloads/${plainToken}`;
+
+  return c.json({ token: plainToken, download_url: downloadUrl, expires_at: expiresAt }, 200);
+});
 
 export { app as orders };

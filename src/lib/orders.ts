@@ -124,6 +124,11 @@ export async function createOrderFromCart(
       [customerId, customerEmail, totalCents, now()]
     );
   }
+  
+  // After the customer upsert, fetch their locale:
+  const [customerLocale] = await db.query<{ locale: string }>(
+    `SELECT locale FROM customers WHERE id = ? LIMIT 1`, [customerId]
+  );
 
   // ── Save shipping address if present ─────────────────────────────────────
   if (shippingAddress && customerId) {
@@ -266,7 +271,8 @@ export async function createOrderFromCart(
         order_number:     orderNumber,
         customer_email:   customerEmail,
         store_name:       ctx_order.storeName,
-        store_base_url:   ctx_order.storeBaseUrl,
+		locale: 		  customerLocale?.locale ?? 'fr-FR',
+        store_base_url:   `${ctx_order.storeBaseUrl}/v1`,
         items:            itemsWithType.map(item => ({
           sku:             item.sku,
           title:           item.title,

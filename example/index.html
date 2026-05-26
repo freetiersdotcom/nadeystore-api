@@ -3,42 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Merchant Store</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Store</title>
+    <script src="tailwind.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
-      body {
-        font-family: 'Space Grotesk', sans-serif;
-      }
+      body { font-family: 'DM Sans', sans-serif; }
     </style>
+
+    <!-- Set your API URL and public key here, or inject via build tool -->
+    <script>
+      window.__MERCHANT_API_URL__ = 'http://localhost:8787';
+      window.__MERCHANT_PUBLIC_KEY__ = 'pk_your_public_key_here';
+	  window.__MERCHANT_CURRENCY__   = 'XOF'; // set once to match your store
+    </script>
   </head>
-  <body class="bg-black text-white min-h-screen">
+  <body class="bg-zinc-950 text-white min-h-screen">
+
     <!-- Header -->
-    <header class="border-b border-zinc-800">
+    <header class="border-b border-zinc-800 sticky top-0 z-40 bg-zinc-950/95 backdrop-blur">
       <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-        <a href="/" class="text-xl font-bold tracking-tight">MERCHANT</a>
+        <a href="/" class="text-lg font-bold tracking-tight">STORE</a>
         <nav class="flex items-center gap-6">
-          <a href="/" class="text-sm text-zinc-400 hover:text-white transition-colors">Shop</a>
-          <a href="/cart.html" class="relative p-2 hover:bg-zinc-900 rounded-lg transition-colors">
-            <svg
-              class="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              viewBox="0 0 24 24"
-            >
+          <a id="shop" href="/" class="text-sm text-white font-medium">Shop</a>
+          <a href="/cart.html" class="relative p-2 hover:bg-zinc-800 rounded-lg transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
             </svg>
-            <span
-              id="cart-count"
-              class="absolute -top-1 -right-1 bg-white text-black text-xs font-bold w-5 h-5 rounded-full items-center justify-center hidden"
-              >0</span
-            >
+            <span id="cart-count" class="absolute -top-1 -right-1 bg-white text-black text-xs font-bold w-5 h-5 rounded-full items-center justify-center" style="display:none">0</span>
           </a>
         </nav>
       </div>
@@ -46,69 +39,84 @@
 
     <!-- Hero -->
     <section class="border-b border-zinc-800">
-      <div class="max-w-6xl mx-auto px-6 py-20 text-center">
-        <h1 class="text-5xl font-bold mb-4 tracking-tight">The Official Swag Store</h1>
-        <p class="text-zinc-400 text-lg max-w-md mx-auto">
-          Premium apparel and accessories. Built with Merchant.
-        </p>
+      <div class="max-w-6xl mx-auto px-6 py-16">
+        <h1 class="text-4xl font-bold mb-3 tracking-tight">Our Products</h1>
+        <p class="text-zinc-400 text-lg max-w-md">Physical goods and digital downloads — shipped worldwide.</p>
       </div>
     </section>
 
-    <!-- Products -->
-    <main class="max-w-6xl mx-auto px-6 py-12">
-      <!-- Loading State -->
-      <div id="loading" class="text-center py-20">
-        <div
-          class="inline-block w-8 h-8 border-2 border-zinc-700 border-t-white rounded-full animate-spin"
-        ></div>
-        <p class="text-zinc-500 mt-4">Loading products...</p>
-      </div>
-
-      <!-- Error State -->
-      <div id="error" class="text-center py-20 hidden">
-        <div
-          class="inline-flex items-center justify-center w-12 h-12 bg-red-500/10 rounded-full mb-4"
-        >
-          <svg
-            class="w-6 h-6 text-red-500"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <path
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-            />
-          </svg>
+    <!-- Filter tabs -->
+    <div class="border-b border-zinc-800">
+      <div class="max-w-6xl mx-auto px-6">
+        <div class="flex gap-1 py-3">
+          <button data-filter="all"      class="px-4 py-1.5 rounded-lg text-sm font-medium bg-white text-black transition-colors">All</button>
+          <button data-filter="physical" class="px-4 py-1.5 rounded-lg text-sm font-medium text-zinc-400 transition-colors hover:text-white">Physical</button>
+          <button data-filter="digital"  class="px-4 py-1.5 rounded-lg text-sm font-medium text-zinc-400 transition-colors hover:text-white">Digital</button>
         </div>
-        <p class="text-red-400">Failed to load products</p>
-        <p class="text-zinc-500 text-sm mt-1">Make sure the Merchant API is running</p>
+      </div>
+    </div>
+
+    <!-- Products -->
+    <main class="max-w-6xl mx-auto px-6 py-10">
+      <!-- Loading -->
+      <div id="loading" class="text-center py-20">
+        <div class="inline-block w-8 h-8 border-2 border-zinc-700 border-t-white rounded-full animate-spin"></div>
+        <p class="text-zinc-500 mt-4 text-sm">Loading products...</p>
       </div>
 
-      <!-- Products Grid -->
-      <div id="products-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-        <!-- Products injected by JS -->
+      <!-- Error -->
+      <div id="error" class="text-center py-20 hidden">
+        <p class="text-red-400 mb-1">Failed to load products</p>
+        <p class="text-zinc-500 text-sm">Make sure the Merchant API is running</p>
       </div>
+
+      <!-- Grid -->
+      <div id="products-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8"></div>
     </main>
 
     <!-- Footer -->
     <footer class="border-t border-zinc-800 mt-20">
-      <div
-        class="max-w-6xl mx-auto px-6 py-8 flex items-center justify-between text-sm text-zinc-500"
-      >
-        <p>
-          Built with
-          <a href="https://github.com/ygwyg/merchant" class="text-white hover:underline"
-            >Merchant</a
-          >
-        </p>
-        <p>Vanilla JS • No Framework</p>
+      <div class="max-w-6xl mx-auto px-6 py-8 flex items-center justify-between text-sm text-zinc-500">
+        <p>Powered by <a href="https://github.com/ygwyg/merchant" class="text-white hover:underline">Merchant</a></p>
+        <div class="flex items-center gap-3 text-zinc-600 text-xs">
+          <!-- Payment trust badges -->
+          <span>Visa</span><span>·</span><span>Mastercard</span><span>·</span><span>FedaPay</span>
+        </div>
       </div>
     </footer>
+
+    <!-- Email modal — shown on first add-to-cart -->
+    <div id="email-modal" class="fixed inset-0 z-50 bg-black/80 items-center justify-center" style="display:none">
+      <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-sm mx-4">
+        <h2 class="text-lg font-semibold mb-1">Almost there</h2>
+        <p class="text-zinc-400 text-sm mb-4">Enter your email to start your cart. We'll send your order confirmation here.</p>
+        <input
+          id="modal-email"
+          type="email"
+          placeholder="you@example.com"
+          class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 mb-2"
+          autocomplete="email"
+        />
+        <p id="modal-error" class="text-red-400 text-xs mb-3" style="display:none">Please enter a valid email address.</p>
+        <div class="flex gap-2">
+          <button id="modal-cancel" class="flex-1 px-4 py-2.5 text-sm text-zinc-400 hover:text-white transition-colors">Cancel</button>
+          <button id="modal-confirm" class="flex-1 bg-white text-black font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-200 transition-colors text-sm">Continue</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cart toast notification -->
+    <div id="cart-toast" class="fixed bottom-6 right-6 z-50 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 flex items-center gap-3 shadow-xl" style="display:none">
+      <svg class="w-4 h-4 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      <div class="min-w-0">
+        <p class="text-sm font-medium text-white truncate" data-toast-title></p>
+        <p id="toast-added" class="text-xs text-zinc-400">Added to cart</p>
+      </div>
+      <a id="toast-view" href="/cart.html" class="text-xs text-white font-medium bg-zinc-700 hover:bg-zinc-600 px-3 py-1.5 rounded-lg transition-colors flex-shrink-0">View cart</a>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
-
-
-

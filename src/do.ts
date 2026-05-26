@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { MIGRATIONS, DOWNLOAD_TOKENS_SCHEMA } from './migrations';
+import { MIGRATIONS, DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA } from './migrations';
 
 export interface MerchantEnv {
   MERCHANT: DurableObjectNamespace<MerchantDO>;
@@ -337,7 +337,6 @@ CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_status ON ucp_checkout_sess
 CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_stripe ON ucp_checkout_sessions(stripe_session_id);
 CREATE INDEX IF NOT EXISTS idx_ucp_checkout_sessions_expires ON ucp_checkout_sessions(expires_at);
 
-${DOWNLOAD_TOKENS_SCHEMA}
 `;
 
 export class MerchantDO extends DurableObject<MerchantEnv> {
@@ -370,6 +369,21 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
         // Column already exists — safe to ignore
       }
     }
+	
+	const tableMigrations = [DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA];
+    for (const block of tableMigrations) {
+      const stmts = block.split(';')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+      for (const stmt of stmts) {
+        try {
+          this.sql.exec(stmt);
+        } catch (err) {
+          console.error('[ensureInitialized] table migration failed:', stmt, err);
+        }
+      }
+    }
+
 	
     this.initialized = true;
   }

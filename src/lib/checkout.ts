@@ -29,10 +29,18 @@ import { validateDiscount, calculateDiscount, type Discount } from '../routes/di
 // (future) or return an error (current safe default).
 const PROVIDER_CURRENCIES: Record<string, string[]> = {
   stripe:    ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF', 'SEK', 'NOK', 'DKK'],
-  fedapay:   ['XOF', 'EUR', 'USD', 'GBP'],
+  fedapay:   ['XOF', 'GNF'],
   paystack:  ['NGN', 'USD', 'GBP', 'ZAR', 'GHS', 'KES'],
   // Add future providers here
 };
+
+// Flat union of all currencies known to any provider.
+// Used to validate the set-currency route without duplicating this list.
+export const SUPPORTED_CURRENCIES = [
+  ...new Set(Object.values(PROVIDER_CURRENCIES).flat()),
+] as const;
+
+export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
 
 export interface PreparedCheckout {
   cart:                 CartRow;
@@ -240,7 +248,7 @@ export async function prepareCheckout(
   }
 
   // ── 6. Resolve currency ───────────────────────────────────────────────────
-  const cartCurrency = (cart.currency ?? 'USD').toUpperCase();
+  const cartCurrency = (cart.currency ?? 'XOF').toUpperCase();
   const supportedCurrencies = PROVIDER_CURRENCIES[provider.toLowerCase()];
 
   // If we don't know the provider's currencies yet (new provider), allow any

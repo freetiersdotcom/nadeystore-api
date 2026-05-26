@@ -97,6 +97,8 @@ app.openapi(listProducts, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
+	  product_type: v.product_type,
+	  digital_asset_key: v.digital_asset_key
     })),
   }));
 
@@ -142,6 +144,8 @@ app.openapi(getProduct, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
+	  product_type: v.product_type,
+	  digital_asset_key: v.digital_asset_key
     })),
   }, 200);
 });
@@ -239,6 +243,8 @@ app.openapi(updateProduct, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
+	  product_type: v.product_type,
+	  digital_asset_key: v.digital_asset_key
     })),
   }, 200);
 });
@@ -332,7 +338,7 @@ app.openapi(createVariant, async (c) => {
     [uuid(), sku, timestamp]
   );
 
-  return c.json({ id, sku, title, price_cents, image_url: image_url || null }, 201);
+  return c.json({ id, sku, title, price_cents, image_url: image_url || null, product_type, digital_asset_key, timestamp}, 201);
 });
 
 const updateVariant = createRoute({
@@ -390,6 +396,11 @@ app.openapi(updateVariant, async (c) => {
     updates.push('image_url = ?');
     params.push(body.image_url);
   }
+  
+  if (body.product_type !== undefined) {
+    updates.push('product_type = ?');
+    params.push(body.product_type);
+  }
 
   if (updates.length > 0) {
     params.push(variantId);
@@ -404,6 +415,8 @@ app.openapi(updateVariant, async (c) => {
     title: variant.title,
     price_cents: variant.price_cents,
     image_url: variant.image_url,
+	product_type: variant.product_type,
+	digital_asset_key: variant.digital_asset_key
   }, 200);
 });
 

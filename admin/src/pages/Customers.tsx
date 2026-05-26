@@ -16,18 +16,21 @@ import {
   ChevronsUpDown,
   Loader2,
   Mail,
-  Phone,
   MapPin,
   ShoppingBag,
 } from 'lucide-react';
 import { api, Customer } from '../lib/api';
+import { formatPrice } from '../lib/format';
 import { Modal } from '../components/Modal';
+import { useT } from '../lib/locale-context';
 import clsx from 'clsx';
 
 const columnHelper = createColumnHelper<Customer>();
 
 export function Customers() {
   const queryClient = useQueryClient();
+  const t = useT();
+
   const [sorting, setSorting] = useState<SortingState>([{ id: 'created_at', desc: true }]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -68,27 +71,27 @@ export function Customers() {
   const columns = useMemo(
     () => [
       columnHelper.accessor('name', {
-        header: 'Name',
+        header: t('customers.col.name'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue() || '-'}</span>,
       }),
       columnHelper.accessor('email', {
-        header: 'Email',
+        header: t('customers.col.email'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
       }),
       columnHelper.accessor((row) => row.stats.order_count, {
         id: 'orders',
-        header: 'Orders',
+        header: t('customers.col.orders'),
         cell: (info) => <span className="font-mono text-sm">{info.getValue()}</span>,
       }),
       columnHelper.accessor((row) => row.stats.total_spent_cents, {
         id: 'spent',
-        header: 'Total Spent',
+        header: t('customers.col.spent'),
         cell: (info) => (
-          <span className="font-mono text-sm">${(info.getValue() / 100).toFixed(2)}</span>
+          <span className="font-mono text-sm">{formatPrice(info.getValue())}</span>
         ),
       }),
       columnHelper.accessor('created_at', {
-        header: 'First Order',
+        header: t('customers.col.since'),
         cell: (info) => (
           <span className="font-mono text-sm">
             {new Date(info.getValue()).toLocaleDateString()}
@@ -96,7 +99,7 @@ export function Customers() {
         ),
       }),
     ],
-    []
+    [t]
   );
 
   const table = useReactTable({
@@ -110,14 +113,12 @@ export function Customers() {
     getFilteredRowModel: getFilteredRowModel(),
   });
 
-  const formatCurrency = (cents: number) => `$${(cents / 100).toFixed(2)}`;
-
   return (
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-4 h-9">
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
-          Customers
+          {t('customers.title')}
         </h1>
         {isFetching && !isLoading && (
           <Loader2 className="animate-spin" size={16} style={{ color: 'var(--text-muted)' }} />
@@ -138,7 +139,7 @@ export function Customers() {
             <Search size={16} className="flex-shrink-0" />
             <input
               type="text"
-              placeholder="Search..."
+              placeholder={t('customers.search')}
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="bg-transparent border-0 font-mono text-sm w-full focus:outline-none"
@@ -154,7 +155,7 @@ export function Customers() {
           </div>
         ) : customers.length === 0 ? (
           <div className="py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-            No customers yet. Customers are created automatically when orders are placed.
+            {t('customers.empty')}
           </div>
         ) : (
           <table className="w-full">
@@ -215,7 +216,7 @@ export function Customers() {
       <Modal
         open={!!selectedCustomer}
         onClose={() => setSelectedCustomer(null)}
-        title={customerDetail?.name || selectedCustomer?.email || 'Customer'}
+        title={customerDetail?.name || selectedCustomer?.email || t('customers.title')}
         size="lg"
       >
         {selectedCustomer && (
@@ -233,15 +234,16 @@ export function Customers() {
                     className="text-xs font-medium uppercase tracking-wide"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    Contact
+                    {t('customers.detail.contact')}
                   </h4>
                   <div className="space-y-3">
+                    {/* Name */}
                     <div>
                       <label
                         className="block text-xs font-medium uppercase tracking-wide mb-1.5"
                         style={{ color: 'var(--text-secondary)' }}
                       >
-                        Name
+                        {t('customers.col.name')}
                       </label>
                       <input
                         type="text"
@@ -254,7 +256,7 @@ export function Customers() {
                             });
                           }
                         }}
-                        placeholder="Customer name"
+                        placeholder={t('customers.detail.namePlaceholder')}
                         className="w-full px-3 py-2 font-mono text-sm rounded-lg focus:outline-none focus:ring-2"
                         style={{
                           background: 'var(--bg-card)',
@@ -263,12 +265,13 @@ export function Customers() {
                         }}
                       />
                     </div>
+                    {/* Email */}
                     <div>
                       <label
                         className="block text-xs font-medium uppercase tracking-wide mb-1.5"
                         style={{ color: 'var(--text-secondary)' }}
                       >
-                        Email
+                        {t('customers.col.email')}
                       </label>
                       <div
                         className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg"
@@ -287,12 +290,13 @@ export function Customers() {
                         </a>
                       </div>
                     </div>
+                    {/* Phone */}
                     <div>
                       <label
                         className="block text-xs font-medium uppercase tracking-wide mb-1.5"
                         style={{ color: 'var(--text-secondary)' }}
                       >
-                        Phone
+                        {t('common.phone')}
                       </label>
                       <input
                         type="tel"
@@ -305,7 +309,7 @@ export function Customers() {
                             });
                           }
                         }}
-                        placeholder="Phone number"
+                        placeholder={t('customers.detail.phonePlaceholder')}
                         className="w-full px-3 py-2 font-mono text-sm rounded-lg focus:outline-none focus:ring-2"
                         style={{
                           background: 'var(--bg-card)',
@@ -321,7 +325,7 @@ export function Customers() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
                     <p className="text-xs uppercase" style={{ color: 'var(--text-secondary)' }}>
-                      Orders
+                      {t('customers.detail.totalOrders')}
                     </p>
                     <p className="text-xl font-semibold font-mono mt-1">
                       {selectedCustomer.stats.order_count}
@@ -329,23 +333,23 @@ export function Customers() {
                   </div>
                   <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
                     <p className="text-xs uppercase" style={{ color: 'var(--text-secondary)' }}>
-                      Spent
+                      {t('customers.detail.totalSpent')}
                     </p>
                     <p className="text-xl font-semibold font-mono mt-1">
-                      {formatCurrency(selectedCustomer.stats.total_spent_cents)}
+                      {formatPrice(selectedCustomer.stats.total_spent_cents)}
                     </p>
                   </div>
                 </div>
 
                 {/* Addresses */}
-                {customerDetail?.addresses && customerDetail.addresses.length > 0 && (
+                {customerDetail?.addresses && customerDetail.addresses.length > 0 ? (
                   <div className="p-3 rounded-lg" style={{ border: '1px solid var(--border)' }}>
                     <h4
                       className="text-xs font-medium uppercase tracking-wide mb-2 flex items-center gap-2"
                       style={{ color: 'var(--text-secondary)' }}
                     >
                       <MapPin size={14} />
-                      Addresses
+                      {t('customers.detail.addresses')}
                     </h4>
                     <div className="space-y-3">
                       {customerDetail.addresses.map((addr) => (
@@ -364,7 +368,7 @@ export function Customers() {
                                 className="text-xs font-sans"
                                 style={{ color: 'var(--text-muted)' }}
                               >
-                                Default
+                                {t('customers.detail.defaultAddress')}
                               </span>
                             )}
                           </div>
@@ -382,6 +386,12 @@ export function Customers() {
                       ))}
                     </div>
                   </div>
+                ) : (
+                  customerDetail && (
+                    <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                      {t('customers.detail.noAddresses')}
+                    </p>
+                  )
                 )}
               </div>
 
@@ -392,7 +402,7 @@ export function Customers() {
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   <ShoppingBag size={14} />
-                  Recent Orders
+                  {t('customers.detail.recentOrders')}
                 </h4>
                 {customerOrders?.items && customerOrders.items.length > 0 ? (
                   <div className="space-y-2">
@@ -410,13 +420,13 @@ export function Customers() {
                         </div>
                         <div className="text-right">
                           <p className="font-mono text-sm">
-                            {formatCurrency(order.amounts.total_cents)}
+                            {formatPrice(order.amounts.total_cents)}
                           </p>
                           <p
-                            className="text-xs font-mono capitalize"
+                            className="text-xs font-mono"
                             style={{ color: 'var(--text-muted)' }}
                           >
-                            {order.status}
+                            {t(`orders.status.${order.status}` as Parameters<typeof t>[0])}
                           </p>
                         </div>
                       </div>
@@ -424,7 +434,7 @@ export function Customers() {
                   </div>
                 ) : (
                   <p className="text-sm font-mono" style={{ color: 'var(--text-secondary)' }}>
-                    No orders yet
+                    {t('customers.detail.noOrders')}
                   </p>
                 )}
               </div>
@@ -435,11 +445,12 @@ export function Customers() {
               className="text-xs font-mono pt-4 border-t"
               style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
             >
-              Customer since {new Date(selectedCustomer.created_at).toLocaleString()}
+              {t('customers.detail.since')} {new Date(selectedCustomer.created_at).toLocaleString()}
               {selectedCustomer.stats.last_order_at && (
                 <span>
                   {' '}
-                  · Last order {new Date(selectedCustomer.stats.last_order_at).toLocaleString()}
+                  · {t('customers.detail.lastOrder')}{' '}
+                  {new Date(selectedCustomer.stats.last_order_at).toLocaleString()}
                 </span>
               )}
             </div>
