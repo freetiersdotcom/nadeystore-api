@@ -130,7 +130,7 @@ function renderDownloadsBlock(items: TemplateOrderItem[], baseUrl: string): stri
           <tr>
             <td style="font-size: 14px; color: #111;">${esc(item.title)}</td>
             <td align="right">
-              <a href="${esc(baseUrl)}/downloads/${esc(item.download_token)}"
+              <a href="${esc(baseUrl)}/v1/downloads/${esc(item.download_token)}"
                  style="display: inline-block; padding: 8px 16px; background: #111; color: #fff;
                         text-decoration: none; font-size: 13px; border-radius: 4px;">
                 ${et('downloads.button')}
