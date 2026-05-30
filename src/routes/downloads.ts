@@ -95,26 +95,27 @@ app.openapi(getDownload, async (c) => {
   const object = await r2.get(variant.digital_asset_key);
   if (!object) throw ApiError.notFound('Asset file not found in storage');
 
-  // 5. Atomically increment download count
-  const incremented = await incrementDownloadCount(db, tokenRow.id, tokenRow.max_downloads);
-  if (!incremented) {
-    throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
-  }
-
-  const downloadsRemaining = Math.max(0, tokenRow.max_downloads - tokenRow.download_count - 1);
   const filename    = variant.digital_asset_key.split('/').pop() ?? 'download';
   const contentType = object.httpMetadata?.contentType ?? 'application/octet-stream';
 
   // If the client wants JSON, return metadata instead of the file
   const acceptsJson = c.req.header('Accept')?.includes('application/json');
+  const workerUrl = new URL(c.req.url).origin;
   if (acceptsJson) {
+	const downloadsRemaining = Math.max(0, tokenRow.max_downloads - tokenRow.download_count);
     return c.json({
       sku:                 tokenRow.sku,
       order_id:            tokenRow.order_id,
       downloads_remaining: downloadsRemaining,
       expires_at:          tokenRow.expires_at,
-      redirect_url:        `${c.env.IMAGES_URL ?? ''}/${variant.digital_asset_key}`,
+      download_url:        `${workerUrl}/v1/downloads/${token}`,
     }, 200);
+  }
+  
+  // 5. Atomically increment download count for streaming the file but not for displaying the metadata
+  const incremented = await incrementDownloadCount(db, tokenRow.id, tokenRow.max_downloads);
+  if (!incremented) {
+    throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
   }
 
   // Stream file directly to the client

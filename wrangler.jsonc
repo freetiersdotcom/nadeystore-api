@@ -27,8 +27,8 @@
 
   "vars": {
 	"STORE_NAME": "Nadey Store",
-	"STORE_URL": "https://nadeystore-api.freetiers-com.workers.dev",
-	"IMAGES_URL": ""
+	"STORE_URL": "https://nadeystore.freetiers-com.workers.dev",
+	"IMAGES_URL": "nadeystore-api"
   },
 
   "triggers": {

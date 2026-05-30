@@ -652,7 +652,7 @@ app.openapi(reissueDownload, async (c) => {
 
   // Build the download URL — read STORE_URL from env if available
   const storeBaseUrl = (c.env as any).STORE_URL ?? 'http://localhost:8787';
-  const downloadUrl  = `${storeBaseUrl}/v1/downloads/${plainToken}`;
+  const downloadUrl = `${storeBaseUrl}/fr/telechargements/?token=${plainToken}`;
 
   return c.json({ token: plainToken, download_url: downloadUrl, expires_at: expiresAt }, 200);
 });
