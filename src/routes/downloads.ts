@@ -16,11 +16,11 @@ const DownloadTokenParam = z.object({
 });
 
 const DownloadInfoResponse = z.object({
-  sku: z.string(),
-  order_id: z.string(),
+  sku:                 z.string(),
+  order_id:            z.string(),
   downloads_remaining: z.number().int(),
-  expires_at: z.string().datetime(),
-  redirect_url: z.string().url(),
+  expires_at:          z.string().datetime(),
+  download_url:        z.string().url(),   // ← was redirect_url
 }).openapi('DownloadInfo');
 
 // ============================================================
@@ -118,6 +118,9 @@ app.openapi(getDownload, async (c) => {
     throw ApiError.invalidRequest('This download link has reached its maximum number of uses');
   }
 
+  // downloadsRemaining recalculated here in the streaming scope
+  const downloadsRemaining = Math.max(0, tokenRow.max_downloads - tokenRow.download_count - 1);
+  
   // Stream file directly to the client
   return new Response(object.body, {
     headers: {
