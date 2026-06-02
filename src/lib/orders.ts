@@ -272,7 +272,7 @@ export async function createOrderFromCart(
         customer_email:   customerEmail,
         store_name:       ctx_order.storeName,
 		locale: 		  customerLocale?.locale ?? 'fr-FR',
-        store_base_url:   `${ctx_order.storeBaseUrl}/v1`,
+        store_base_url:   `${ctx_order.storeBaseUrl}/`,
         items:            itemsWithType.map(item => ({
           sku:             item.sku,
           title:           item.title,
