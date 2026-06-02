@@ -456,4 +456,55 @@ app.openapi(deleteVariant, async (c) => {
   return c.json({ deleted: true as const }, 200);
 });
 
+// Temporary migration route — DELETE AFTER RUNNING ONCE
+const migrateImageUrls = createRoute({
+  method: 'post',
+  path: '/migrate-image-urls',
+  tags: ['Products'],
+  security: [{ bearerAuth: [] }],
+  middleware: [adminOnly] as const,
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            old_host: z.string(),
+            new_host: z.string(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({ updated_products: z.number(), updated_variants: z.number() }),
+        },
+      },
+      description: 'URLs updated',
+    },
+  },
+});
+
+app.openapi(migrateImageUrls, async (c) => {
+  const { old_host, new_host } = c.req.valid('json');
+  const db = getDb(c.var.db);
+
+  const r1 = await db.run(
+    `UPDATE products SET image_url = REPLACE(image_url, ?, ?) WHERE image_url LIKE ?`,
+    [old_host, new_host, `%${old_host}%`]
+  );
+
+  const r2 = await db.run(
+    `UPDATE variants SET image_url = REPLACE(image_url, ?, ?) WHERE image_url LIKE ?`,
+    [old_host, new_host, `%${old_host}%`]
+  );
+
+  return c.json({
+    updated_products: r1.changes,
+    updated_variants: r2.changes,
+  }, 200);
+});
+
 export { app as catalog };
