@@ -491,19 +491,19 @@ app.openapi(migrateImageUrls, async (c) => {
   const { old_host, new_host } = c.req.valid('json');
   const db = getDb(c.var.db);
 
-  const r1 = await db.run(
+  /*const r1 = await db.run(
     `UPDATE products SET image_url = REPLACE(image_url, ?, ?) WHERE image_url LIKE ?`,
     [old_host, new_host, `%${old_host}%`]
-  );
+  );*/
 
-  const r2 = await db.run(
+  const r = await db.run(
     `UPDATE variants SET image_url = REPLACE(image_url, ?, ?) WHERE image_url LIKE ?`,
     [old_host, new_host, `%${old_host}%`]
   );
 
   return c.json({
-    updated_products: r1.changes,
-    updated_variants: r2.changes,
+    //updated_products: r1.changes,
+    updated_variants: r.changes,
   }, 200);
 });
 
