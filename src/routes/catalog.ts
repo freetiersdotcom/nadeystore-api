@@ -459,7 +459,7 @@ app.openapi(deleteVariant, async (c) => {
 // Temporary migration route — DELETE AFTER RUNNING ONCE
 const migrateImageUrls = createRoute({
   method: 'post',
-  path: '/migrate-image-urls',
+  path: '/admin/migrate-image-urls',
   tags: ['Products'],
   security: [{ bearerAuth: [] }],
   middleware: [adminOnly] as const,
