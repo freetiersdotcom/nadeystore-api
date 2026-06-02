@@ -479,7 +479,7 @@ const migrateImageUrls = createRoute({
     200: {
       content: {
         'application/json': {
-          schema: z.object({ updated_products: z.number(), updated_variants: z.number() }),
+          schema: z.object({ updated_variants: z.number() }),//schema: z.object({ updated_products: z.number(), updated_variants: z.number() }),
         },
       },
       description: 'URLs updated',
