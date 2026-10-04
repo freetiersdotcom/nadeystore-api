@@ -34,6 +34,20 @@ const initKeys = createRoute({
 });
 
 app.openapi(initKeys, async (c) => {
+  // This endpoint creates the first admin key and has no other auth of its own,
+  // so it must never run on an unattended, publicly reachable deploy without a
+  // caller-supplied secret proving this is the legitimate first-run setup call.
+  // Set with: wrangler secret put SETUP_TOKEN
+  if (!c.env.SETUP_TOKEN) {
+    throw ApiError.invalidRequest(
+      'SETUP_TOKEN is not configured. Set it with `wrangler secret put SETUP_TOKEN` before calling /v1/setup/init.'
+    );
+  }
+  const providedToken = c.req.header('X-Setup-Token');
+  if (providedToken !== c.env.SETUP_TOKEN) {
+    throw ApiError.unauthorized('Missing or invalid X-Setup-Token header');
+  }
+
   const { keys } = c.req.valid('json');
   const db = getDb(c.var.db);
 

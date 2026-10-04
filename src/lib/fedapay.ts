@@ -100,8 +100,6 @@ export async function createFedaPayCheckout(opts: {
     Authorization: `Bearer ${opts.config.secret_key}`,
     'Content-Type': 'application/json',
   };
-  
-  console.log('headers:', JSON.stringify(headers));
 
   // Step 1: Create the transaction
   const createRes = await fetch(`${base}/v1/transactions`, {
@@ -115,8 +113,6 @@ export async function createFedaPayCheckout(opts: {
       customer: { email: opts.customerEmail },
     }),
   });
-  
-  console.log('createRes:', JSON.stringify(createRes));
 
   if (!createRes.ok) {
     const err = await createRes.text();
@@ -142,7 +138,6 @@ export async function createFedaPayCheckout(opts: {
   }
 
   const tokenData = await tokenRes.json() as Record<string, any>;
-  console.log('FedaPay token response:', JSON.stringify(tokenData))
   const checkoutUrl = tokenData.url ?? tokenData['v1/transaction']?.payment_url;
   if (!checkoutUrl) {
     throw new Error(`FedaPay token response missing URL. Raw: ${JSON.stringify(tokenData)}`);

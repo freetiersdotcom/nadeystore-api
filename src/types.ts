@@ -5,8 +5,11 @@ export type Env = {
   IMAGES?: R2Bucket;
   IMAGES_URL?: string;
   STORE_NAME?: string;
+  STORE_URL?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  /** One-time secret required to call POST /v1/setup/init. Set via `wrangler secret put SETUP_TOKEN`. */
+  SETUP_TOKEN?: string;
 };
 
 export type DOStub = {
