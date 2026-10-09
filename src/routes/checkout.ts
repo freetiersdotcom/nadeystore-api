@@ -76,6 +76,10 @@ async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
     }
   }
 
+  const [order] = await db.query<{ id: string; number: string; needs_review: number }>(
+    `SELECT id, number, needs_review FROM orders WHERE cart_id = ? LIMIT 1`, [cart.id]
+  );
+
   return {
     id:             cart.id,
     status:         cart.status,
@@ -97,13 +101,16 @@ async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
       total_cents:     subtotalCents - discountAmountCents,
     },
     expires_at: cart.expires_at,
+    order: order
+      ? { id: order.id, number: order.number, needs_review: !!order.needs_review }
+      : null,
   };
 }
 
-const RemoveDiscountResponse = z.object({
-  discount: z.null(),
-  totals: CartTotals,
-}).openapi('RemoveDiscountResponse');
+// remove-discount's handler actually returns the full cart via
+// buildCartResponse(), same as apply-discount — see ApplyDiscountResponse
+// in schemas.ts for why this is CartResponse rather than a narrow slice.
+const RemoveDiscountResponse = CartResponse;
 
 const app = new OpenAPIHono<HonoEnv>();
 
@@ -160,7 +167,7 @@ app.openapi(createCart, async (c) => {
     customer_email,
     expiresAt,
   ]);*/
-  
+
   await db.run(
     `INSERT INTO carts (id, customer_email, currency, expires_at) VALUES (?, ?, ?, ?)`,
     [id, customer_email, currency, expiresAt]
@@ -441,6 +448,15 @@ app.openapi(checkoutCart, async (c) => {
     throw err;
   }
 
+  // Stripe types session.url as string | null (null for e.g. embedded-mode
+  // sessions). A hosted checkout always has one, so a missing URL means the
+  // session is unusable: release the inventory/discount hold taken by
+  // prepareCheckout instead of returning an unusable response.
+  if (!session.url) {
+    await prepared.rollback();
+    throw ApiError.invalidRequest('Stripe did not return a checkout URL');
+  }
+
   await db.run(
     `UPDATE carts SET stripe_checkout_session_id = ?, discount_amount_cents = ?, updated_at = ?
      WHERE id = ?`,
@@ -523,7 +539,7 @@ app.openapi(fedaPayCheckout, async (c) => {
      VALUES (?, ?, ?)`,
     [result.transaction_id, cartId, now()]
   );
-  
+
   console.log(`[fedapay] Mapped transaction ${result.transaction_id} → cart ${cartId}`);
 
   // Store discount amount on cart so the webhook handler can read it
@@ -684,7 +700,7 @@ app.openapi(applyDiscount, async (c) => {
     `UPDATE carts SET discount_code = ?, discount_id = ?, discount_amount_cents = ? WHERE id = ?`,
     [discount.code, discount.id, discountAmountCents, cartId]
   );
-  
+
   // Re-fetch cart so buildCartResponse sees the updated discount fields
   const [updatedCart] = await db.query<any>(
     `SELECT * FROM carts WHERE id = ? LIMIT 1`, [cartId]
@@ -724,7 +740,7 @@ app.openapi(removeDiscount, async (c) => {
   );
 
   return c.json(await buildCartResponse(db, updatedCart), 200);
-  
+
 });
 
 export { app as checkout };

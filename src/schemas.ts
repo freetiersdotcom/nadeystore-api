@@ -41,6 +41,7 @@ export const VariantResponse = z.object({
   title: z.string().openapi({ example: 'PDF Edition' }),
   price_cents: z.number().int().openapi({ example: 1499 }),
   image_url: z.string().nullable().openapi({ example: 'https://example.com/image.jpg' }),
+  weight_g: z.number().int().openapi({ example: 0, description: 'Weight in grams. 0 for digital products.' }),
   product_type: ProductType,
   /** Only present for digital variants — the R2 object key */
   digital_asset_key: z.string().nullable().openapi({
@@ -68,6 +69,7 @@ export const UpdateVariantBody = z.object({
   title: z.string().min(1).optional(),
   price_cents: z.number().int().min(0).optional(),
   image_url: z.string().url().nullable().optional(),
+  weight_g: z.number().int().min(0).optional(),
   product_type: ProductType.optional(),
 }).openapi('UpdateVariant');
 
@@ -121,6 +123,10 @@ export const ProductResponse = z.object({
   id: z.string().uuid(),
   title: z.string().openapi({ example: 'Classic T-Shirt' }),
   description: z.string().nullable().openapi({ example: 'A comfortable cotton tee' }),
+  slug: z.string().nullable().openapi({ example: 'classic-t-shirt', description: 'URL-friendly identifier, unique across products. Auto-generated from title if not supplied.' }),
+  description_fr: z.string().nullable(),
+  description_en: z.string().nullable(),
+  tags: z.array(z.string()).nullable(),
   status: ProductStatus,
   created_at: z.string().datetime(),
   variants: z.array(VariantResponse),
@@ -134,16 +140,26 @@ export const ProductListResponse = z.object({
 export const CreateProductBody = z.object({
   title: z.string().min(1).openapi({ example: 'Classic T-Shirt' }),
   description: z.string().optional().openapi({ example: 'A comfortable cotton tee' }),
+  slug: z.string().min(1).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'slug must be lowercase alphanumeric with hyphens').optional()
+    .openapi({ example: 'classic-t-shirt', description: 'Auto-generated from title if omitted.' }),
+  description_fr: z.string().optional(),
+  description_en: z.string().optional(),
+  tags: z.array(z.string()).optional(),
 }).openapi('CreateProduct');
 
 export const UpdateProductBody = z.object({
   title: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
+  slug: z.string().min(1).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'slug must be lowercase alphanumeric with hyphens').optional(),
+  description_fr: z.string().nullable().optional(),
+  description_en: z.string().nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
   status: ProductStatus.optional(),
 }).openapi('UpdateProduct');
 
 export const ProductQuery = PaginationQuery.extend({
   status: ProductStatus.optional().openapi({ param: { name: 'status', in: 'query' } }),
+  tag: z.string().optional().openapi({ param: { name: 'tag', in: 'query' }, description: 'Filter to products containing this tag' }),
 });
 
 // ============================================================
@@ -220,6 +236,14 @@ export const CartResponse = z.object({
   totals: CartTotals.optional(),
   expires_at: z.string().datetime(),
   stripe_checkout_session_id: z.string().nullable().optional(),
+  // Present once an order has actually been created from this cart — the
+  // authoritative "did this checkout succeed" signal, independent of
+  // cart.status (which 'expired' overloads for both success and abandonment).
+  order: z.object({
+    id: z.string(),
+    number: z.string(),
+    needs_review: z.boolean(),
+  }).nullable().optional(),
 }).openapi('Cart');
 
 /*export const CreateCartBody = z.object({
@@ -247,22 +271,19 @@ export const CheckoutBody = z.object({
 }).openapi('Checkout');
 
 export const CheckoutResponse = z.object({
+  id: z.string(),
   checkout_url: z.string().url(),
-  stripe_checkout_session_id: z.string(),
+  expires_at: z.string().datetime(),
 }).openapi('CheckoutResult');
 
 export const ApplyDiscountBody = z.object({
   code: z.string().min(1).openapi({ example: 'SAVE10' }),
 }).openapi('ApplyDiscount');
 
-export const ApplyDiscountResponse = z.object({
-  discount: z.object({
-    code: z.string(),
-    type: z.enum(['percentage', 'fixed_amount']),
-    amount_cents: z.number().int(),
-  }),
-  totals: CartTotals,
-}).openapi('ApplyDiscountResult');
+// apply-discount's handler actually returns the full cart via
+// buildCartResponse(), not just a discount/totals slice — use CartResponse
+// (declared above) so the declared schema matches what's actually sent.
+export const ApplyDiscountResponse = CartResponse;
 
 export const CartIdParam = z.object({
   cartId: z.string().uuid().openapi({ param: { name: 'cartId', in: 'path' } }),
@@ -294,6 +315,8 @@ export const OrderResponse = z.object({
   id: z.string().uuid(),
   number: z.string().openapi({ example: 'ORD-241231-A7K2' }),
   status: OrderStatus,
+  needs_review: z.boolean().optional(),
+  review_reason: z.string().nullable().optional(),
   customer_email: z.string().email(),
   customer_id: z.string().uuid().nullable(),
   shipping: z.object({
@@ -334,12 +357,14 @@ export const OrderListResponse = z.object({
 export const OrderQuery = PaginationQuery.extend({
   status: OrderStatus.optional().openapi({ param: { name: 'status', in: 'query' } }),
   email: z.string().email().optional().openapi({ param: { name: 'email', in: 'query' } }),
+  needs_review: z.coerce.boolean().optional().openapi({ param: { name: 'needs_review', in: 'query' } }),
 });
 
 export const UpdateOrderBody = z.object({
   status: OrderStatus.optional(),
   tracking_number: z.string().nullable().optional(),
   tracking_url: z.string().url().nullable().optional(),
+  needs_review: z.boolean().optional(),
 }).openapi('UpdateOrder');
 
 export const RefundOrderBody = z.object({

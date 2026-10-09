@@ -26,6 +26,29 @@ const app = new OpenAPIHono<HonoEnv>();
 
 app.use('*', authMiddleware);
 
+function slugify(input: string): string {
+  return input
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip accents
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'product';
+}
+
+// Generates a unique slug by appending -2, -3, ... on conflict. Products
+// table is small enough that a per-create existence check is cheap.
+async function uniqueSlug(db: ReturnType<typeof getDb>, base: string, excludeId?: string): Promise<string> {
+  let candidate = base;
+  let suffix = 2;
+  while (true) {
+    const rows = excludeId
+      ? await db.query<{ id: string }>(`SELECT id FROM products WHERE slug = ? AND id != ?`, [candidate, excludeId])
+      : await db.query<{ id: string }>(`SELECT id FROM products WHERE slug = ?`, [candidate]);
+    if (rows.length === 0) return candidate;
+    candidate = `${base}-${suffix++}`;
+  }
+}
+
 const listProducts = createRoute({
   method: 'get',
   path: '/',
@@ -40,7 +63,7 @@ const listProducts = createRoute({
 
 app.openapi(listProducts, async (c) => {
   const db = getDb(c.var.db);
-  const { limit: limitStr, cursor, status } = c.req.valid('query');
+  const { limit: limitStr, cursor, status, tag } = c.req.valid('query');
   const limit = Math.min(parseInt(limitStr || '20'), 100);
 
   let query = `SELECT * FROM products`;
@@ -50,6 +73,12 @@ app.openapi(listProducts, async (c) => {
   if (status) {
     conditions.push(`status = ?`);
     params.push(status);
+  }
+  if (tag) {
+    // tags is stored as a JSON array string (e.g. '["skincare","bestseller"]');
+    // a simple LIKE on the quoted value is enough for this volume of data.
+    conditions.push(`tags LIKE ?`);
+    params.push(`%"${tag}"%`);
   }
   if (cursor) {
     conditions.push(`created_at < ?`);
@@ -89,6 +118,10 @@ app.openapi(listProducts, async (c) => {
     id: p.id,
     title: p.title,
     description: p.description,
+    slug: p.slug,
+    description_fr: p.description_fr,
+    description_en: p.description_en,
+    tags: p.tags ? JSON.parse(p.tags) : null,
     status: p.status,
     created_at: p.created_at,
     variants: (variantsByProduct[p.id] || []).map((v) => ({
@@ -97,8 +130,9 @@ app.openapi(listProducts, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
-	  product_type: v.product_type,
-	  digital_asset_key: v.digital_asset_key
+      weight_g: v.weight_g,
+      product_type: v.product_type,
+      digital_asset_key: v.digital_asset_key,
     })),
   }));
 
@@ -136,6 +170,10 @@ app.openapi(getProduct, async (c) => {
     id: product.id,
     title: product.title,
     description: product.description,
+    slug: product.slug,
+    description_fr: product.description_fr,
+    description_en: product.description_en,
+    tags: product.tags ? JSON.parse(product.tags) : null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
@@ -144,8 +182,9 @@ app.openapi(getProduct, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
-	  product_type: v.product_type,
-	  digital_asset_key: v.digital_asset_key
+      weight_g: v.weight_g,
+      product_type: v.product_type,
+      digital_asset_key: v.digital_asset_key,
     })),
   }, 200);
 });
@@ -165,19 +204,27 @@ const createProduct = createRoute({
 });
 
 app.openapi(createProduct, async (c) => {
-  const { title, description } = c.req.valid('json');
+  const { title, description, slug, description_fr, description_en, tags } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const id = uuid();
   const timestamp = now();
+  const finalSlug = await uniqueSlug(db, slug ? slugify(slug) : slugify(title));
 
   await db.run(
-    `INSERT INTO products (id, title, description, status, created_at) VALUES (?, ?, ?, 'active', ?)`,
-    [id, title, description || null, timestamp]
+    `INSERT INTO products (id, title, description, slug, description_fr, description_en, tags, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+    [id, title, description || null, finalSlug, description_fr || null, description_en || null,
+     tags ? JSON.stringify(tags) : null, timestamp]
   );
 
   return c.json(
-    { id, title, description: description || null, status: 'active' as const, created_at: timestamp, variants: [] },
+    {
+      id, title, description: description || null, slug: finalSlug,
+      description_fr: description_fr || null, description_en: description_en || null,
+      tags: tags || null,
+      status: 'active' as const, created_at: timestamp, variants: [],
+    },
     201
   );
 });
@@ -218,6 +265,23 @@ app.openapi(updateProduct, async (c) => {
     updates.push('description = ?');
     params.push(body.description);
   }
+  if (body.slug !== undefined) {
+    const finalSlug = await uniqueSlug(db, slugify(body.slug), id);
+    updates.push('slug = ?');
+    params.push(finalSlug);
+  }
+  if (body.description_fr !== undefined) {
+    updates.push('description_fr = ?');
+    params.push(body.description_fr);
+  }
+  if (body.description_en !== undefined) {
+    updates.push('description_en = ?');
+    params.push(body.description_en);
+  }
+  if (body.tags !== undefined) {
+    updates.push('tags = ?');
+    params.push(body.tags ? JSON.stringify(body.tags) : null);
+  }
   if (body.status !== undefined) {
     updates.push('status = ?');
     params.push(body.status);
@@ -235,6 +299,10 @@ app.openapi(updateProduct, async (c) => {
     id: product.id,
     title: product.title,
     description: product.description,
+    slug: product.slug,
+    description_fr: product.description_fr,
+    description_en: product.description_en,
+    tags: product.tags ? JSON.parse(product.tags) : null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
@@ -243,8 +311,9 @@ app.openapi(updateProduct, async (c) => {
       title: v.title,
       price_cents: v.price_cents,
       image_url: v.image_url,
-	  product_type: v.product_type,
-	  digital_asset_key: v.digital_asset_key
+      weight_g: v.weight_g,
+      product_type: v.product_type,
+      digital_asset_key: v.digital_asset_key,
     })),
   }, 200);
 });
@@ -316,7 +385,7 @@ const createVariant = createRoute({
 
 app.openapi(createVariant, async (c) => {
   const { id: productId } = c.req.valid('param');
-  const { sku, title, price_cents, image_url, product_type, digital_asset_key } = c.req.valid('json');
+  const { sku, title, price_cents, image_url, product_type, weight_g } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const [product] = await db.query<any>(`SELECT * FROM products WHERE id = ?`, [productId]);
@@ -327,10 +396,11 @@ app.openapi(createVariant, async (c) => {
 
   const id = uuid();
   const timestamp = now();
-
+  // digital_asset_key is intentionally not settable here — it's only ever
+  // written by the asset upload/delete endpoints in routes/assets.ts.
   await db.run(
     `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, image_url, product_type, digital_asset_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, productId, sku, title, price_cents, 0, image_url || null, product_type, digital_asset_key, timestamp]
+    [id, productId, sku, title, price_cents, weight_g, image_url || null, product_type, null, timestamp]
   );
 
   await db.run(
@@ -338,7 +408,7 @@ app.openapi(createVariant, async (c) => {
     [uuid(), sku, timestamp]
   );
 
-  return c.json({ id, sku, title, price_cents, image_url: image_url || null, product_type, digital_asset_key, timestamp}, 201);
+  return c.json({ id, sku, title, price_cents, image_url: image_url || null, weight_g, product_type, digital_asset_key: null }, 201);
 });
 
 const updateVariant = createRoute({
@@ -396,7 +466,12 @@ app.openapi(updateVariant, async (c) => {
     updates.push('image_url = ?');
     params.push(body.image_url);
   }
-  
+
+  if (body.weight_g !== undefined) {
+    updates.push('weight_g = ?');
+    params.push(body.weight_g);
+  }
+
   if (body.product_type !== undefined) {
     updates.push('product_type = ?');
     params.push(body.product_type);
@@ -415,8 +490,9 @@ app.openapi(updateVariant, async (c) => {
     title: variant.title,
     price_cents: variant.price_cents,
     image_url: variant.image_url,
-	product_type: variant.product_type,
-	digital_asset_key: variant.digital_asset_key
+    weight_g: variant.weight_g,
+    product_type: variant.product_type,
+    digital_asset_key: variant.digital_asset_key,
   }, 200);
 });
 

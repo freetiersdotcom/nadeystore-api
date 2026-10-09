@@ -96,7 +96,13 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     const id = env.MERCHANT.idFromName('default');
     const stub = env.MERCHANT.get(id);
-    const cleaned = await (stub as unknown as { cleanupExpiredCarts: () => Promise<number> }).cleanupExpiredCarts();
+    const typedStub = stub as unknown as {
+      cleanupExpiredCarts: () => Promise<number>;
+      cleanupStaleCheckedOutCarts: () => Promise<number>;
+    };
+    const cleaned = await typedStub.cleanupExpiredCarts();
     console.log(`Cron: cleaned ${cleaned} expired carts`);
+    const staleCheckouts = await typedStub.cleanupStaleCheckedOutCarts();
+    console.log(`Cron: released ${staleCheckouts} stale checked-out carts`);
   },
 };

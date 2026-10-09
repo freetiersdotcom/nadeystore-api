@@ -31,8 +31,9 @@ import { renderOrderConfirmation } from './email/template';
 import { dispatchWebhooks } from './webhooks';
 
 export interface OrderResult {
-  orderId:     string;
-  orderNumber: string;
+  orderId:      string;
+  orderNumber:  string;
+  needsReview:  boolean;
 }
 
 export interface OrderContext {
@@ -64,13 +65,27 @@ export async function createOrderFromCart(
     return null;
   }
 
-  // Double-processing guard — cart is only processed once
-  // (set to 'checked_out' by the checkout route; here we move it to 'expired'
-  // to signal the order has been fully created)
-  if (cart.status === 'expired') {
+  // Double-processing guard — keyed on whether an order already exists for
+  // this cart, not on cart.status. Status alone can't distinguish "already
+  // converted" from "swept as abandoned, but a late webhook just arrived" —
+  // and the latter must still create an order, just flagged for review.
+  const [existingOrder] = await db.query<{ id: string }>(
+    `SELECT id FROM orders WHERE cart_id = ? LIMIT 1`, [cartId]
+  );
+  if (existingOrder) {
     console.log(`[${ctx_order.provider}] Cart ${cartId} already processed, skipping`);
     return null;
   }
+
+  // If the cart is already 'expired' at this point (and no order exists —
+  // checked above), it was swept by cleanupStaleCheckedOutCarts for
+  // inactivity, and its reserved inventory was already released. The
+  // payment is real and must still be recorded, but fulfillment needs a
+  // human to confirm stock before shipping.
+  const needsReview = cart.status === 'expired';
+  const reviewReason = needsReview
+    ? 'Payment confirmed after this checkout was auto-expired for inactivity; its inventory hold was already released — verify stock before fulfilling.'
+    : null;
 
   const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
   if (!items.length) return null;
@@ -124,7 +139,7 @@ export async function createOrderFromCart(
       [customerId, customerEmail, totalCents, now()]
     );
   }
-  
+
   // After the customer upsert, fetch their locale:
   const [customerLocale] = await db.query<{ locale: string }>(
     `SELECT locale FROM customers WHERE id = ? LIMIT 1`, [customerId]
@@ -165,8 +180,9 @@ export async function createOrderFromCart(
        (id, customer_id, number, status, customer_email,
         shipping_name, shipping_phone, ship_to,
         subtotal_cents, tax_cents, shipping_cents, total_cents, currency,
-        discount_code, discount_id, discount_amount_cents)
-     VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
+        discount_code, discount_id, discount_amount_cents,
+        cart_id, needs_review, review_reason)
+     VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId, customerId, orderNumber, customerEmail,
       shippingName, null,
@@ -174,6 +190,7 @@ export async function createOrderFromCart(
       subtotalCents,
       totalCents, currency,
       discountCode, discountId, discountAmountCents,
+      cartId, needsReview ? 1 : 0, reviewReason,
     ]
   );
 
@@ -210,14 +227,25 @@ export async function createOrderFromCart(
       [uuid(), orderId, item.sku, item.title, item.qty, item.unit_price_cents]
     );
 
-    await db.run(
-      `UPDATE inventory SET
-         reserved  = reserved - ?,
-         on_hand   = on_hand - ?,
-         updated_at = ?
-       WHERE sku = ?`,
-      [item.qty, item.qty, now(), item.sku]
-    );
+    // The sale always happened — on_hand is decremented either way. The
+    // reservation, though, was already released by the abandonment sweep
+    // for a needs_review order, so decrementing it again would make
+    // 'reserved' go negative and understate what's actually available.
+    if (needsReview) {
+      await db.run(
+        `UPDATE inventory SET on_hand = on_hand - ?, updated_at = ? WHERE sku = ?`,
+        [item.qty, now(), item.sku]
+      );
+    } else {
+      await db.run(
+        `UPDATE inventory SET
+           reserved  = reserved - ?,
+           on_hand   = on_hand - ?,
+           updated_at = ?
+         WHERE sku = ?`,
+        [item.qty, item.qty, now(), item.sku]
+      );
+    }
 
     await db.run(
       `INSERT INTO inventory_logs (id, sku, delta, reason) VALUES (?, ?, ?, 'sale')`,
@@ -328,6 +356,7 @@ export async function createOrderFromCart(
       id:             orderId,
       number:         orderNumber,
       status:         'paid',
+      needs_review:   needsReview,
       customer_email: customerEmail,
       customer_id:    customerId,
       provider:       ctx_order.provider,
@@ -355,8 +384,9 @@ export async function createOrderFromCart(
 
   console.log(
     `[${ctx_order.provider}] Order ${orderNumber} created ` +
-    `(cart: ${cartId}, ref: ${ctx_order.providerRef})`
+    `(cart: ${cartId}, ref: ${ctx_order.providerRef})` +
+    (needsReview ? ' — NEEDS REVIEW (late payment after cart was auto-expired)' : '')
   );
 
-  return { orderId, orderNumber };
+  return { orderId, orderNumber, needsReview };
 }

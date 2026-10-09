@@ -76,7 +76,16 @@ ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CH
 ALTER TABLE variants ADD COLUMN digital_asset_key TEXT;
 ALTER TABLE variants ADD COLUMN updated_at TEXT;
 ALTER TABLE carts ADD COLUMN ship_to TEXT;
-ALTER TABLE carts ADD COLUMN shipping_name TEXT
+ALTER TABLE carts ADD COLUMN shipping_name TEXT;
+ALTER TABLE orders ADD COLUMN cart_id TEXT;
+ALTER TABLE orders ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN review_reason TEXT;
+CREATE INDEX IF NOT EXISTS idx_orders_cart_id ON orders(cart_id);
+ALTER TABLE products ADD COLUMN slug TEXT;
+ALTER TABLE products ADD COLUMN description_fr TEXT;
+ALTER TABLE products ADD COLUMN description_en TEXT;
+ALTER TABLE products ADD COLUMN tags TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL
 `;
 
 // The download_tokens table and its indexes go into SCHEMA (already uses IF NOT EXISTS).

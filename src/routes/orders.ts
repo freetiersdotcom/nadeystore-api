@@ -38,7 +38,7 @@ const listOrders = createRoute({
 
 app.openapi(listOrders, async (c) => {
   const db = getDb(c.var.db);
-  const { limit: limitStr, cursor, status, email } = c.req.valid('query');
+  const { limit: limitStr, cursor, status, email, needs_review } = c.req.valid('query');
   const limit = Math.min(parseInt(limitStr || '20'), 100);
 
   let query = `SELECT * FROM orders WHERE 1=1`;
@@ -52,6 +52,11 @@ app.openapi(listOrders, async (c) => {
   if (email) {
     query += ` AND customer_email = ?`;
     params.push(email);
+  }
+
+  if (needs_review !== undefined) {
+    query += ` AND needs_review = ?`;
+    params.push(needs_review ? 1 : 0);
   }
 
   if (cursor) {
@@ -84,7 +89,7 @@ app.openapi(listOrders, async (c) => {
       itemsByOrder[item.order_id].push(item);
     }
   }
-  
+
   // After the itemsByOrder loop, add:
   const allSkus = [...new Set(
     Object.values(itemsByOrder).flat().map((i: any) => i.sku)
@@ -101,9 +106,9 @@ app.openapi(listOrders, async (c) => {
   // Then update the items map call:
   const items = orderList.map((order) =>
     formatOrder(order, itemsByOrder[order.id] || [], variantTypeMap)
-  );  
+  );
 
-  
+
   const nextCursor = hasMore && items.length > 0 ? items[items.length - 1].created_at : null;
 
   return c.json({ items, pagination: { has_more: hasMore, next_cursor: nextCursor } }, 200);
@@ -166,7 +171,7 @@ const updateOrder = createRoute({
 
 app.openapi(updateOrder, async (c) => {
   const { orderId } = c.req.valid('param');
-  const { status, tracking_number, tracking_url } = c.req.valid('json');
+  const { status, tracking_number, tracking_url, needs_review } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const [order] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
@@ -193,6 +198,14 @@ app.openapi(updateOrder, async (c) => {
   if (tracking_url !== undefined) {
     updates.push('tracking_url = ?');
     params.push(tracking_url || null);
+  }
+
+  if (needs_review !== undefined) {
+    updates.push('needs_review = ?');
+    params.push(needs_review ? 1 : 0);
+    if (!needs_review) {
+      updates.push('review_reason = NULL');
+    }
   }
 
   if (updates.length === 0) {
@@ -360,7 +373,7 @@ app.openapi(createTestOrder, async (c) => {
   if (existingCustomer) {
     customerId = existingCustomer.id;
     await db.run(
-      `UPDATE customers SET 
+      `UPDATE customers SET
         order_count = order_count + 1,
         total_spent_cents = total_spent_cents + ?,
         last_order_at = ?,
@@ -392,9 +405,9 @@ app.openapi(createTestOrder, async (c) => {
 
     if (discount.usage_limit !== null) {
       const result = await db.run(
-        `UPDATE discounts 
-         SET usage_count = usage_count + 1, updated_at = ? 
-         WHERE id = ? 
+        `UPDATE discounts
+         SET usage_count = usage_count + 1, updated_at = ?
+         WHERE id = ?
            AND status = 'active'
            AND (starts_at IS NULL OR starts_at <= ?)
            AND (expires_at IS NULL OR expires_at >= ?)
@@ -407,9 +420,9 @@ app.openapi(createTestOrder, async (c) => {
       }
     } else {
       const result = await db.run(
-        `UPDATE discounts 
-         SET updated_at = ? 
-         WHERE id = ? 
+        `UPDATE discounts
+         SET updated_at = ?
+         WHERE id = ?
            AND status = 'active'
            AND (starts_at IS NULL OR starts_at <= ?)
            AND (expires_at IS NULL OR expires_at >= ?)`,
@@ -468,6 +481,8 @@ function formatOrder(order: any, items: any[], variantTypes?: Map<string, string
     id: order.id,
     number: order.number,
     status: order.status,
+    needs_review: !!order.needs_review,
+    review_reason: order.review_reason ?? null,
     customer_email: order.customer_email,
     customer_id: order.customer_id || null,
     shipping: {

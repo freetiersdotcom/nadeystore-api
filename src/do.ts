@@ -357,7 +357,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     for (const stmt of statements) {
       this.sql.exec(stmt);
     }
-	
+
 	// ALTER TABLE migrations (SQLite doesn't support IF NOT EXISTS here)
     const migrations = MIGRATIONS.split(';')
       .map(s => s.trim())
@@ -369,7 +369,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
         // Column already exists — safe to ignore
       }
     }
-	
+
 	const tableMigrations = [DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA];
     for (const block of tableMigrations) {
       const stmts = block.split(';')
@@ -384,7 +384,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
       }
     }
 
-	
+
     this.initialized = true;
   }
 
@@ -465,6 +465,43 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
         }
       }
     }
+  }
+
+  // A 'checked_out' cart has already reserved inventory for a real checkout
+  // attempt (FedaPay/Stripe session). If the customer never completes
+  // payment, nothing today ever releases that hold or moves the cart out of
+  // limbo — this sweep does both, after a generous grace window (payment
+  // provider checkout sessions don't normally stay valid much longer).
+  async cleanupStaleCheckedOutCarts(graceMinutes = 120): Promise<number> {
+    this.ensureInitialized();
+
+    const cutoff = new Date(Date.now() - graceMinutes * 60 * 1000).toISOString();
+
+    const staleCarts = this.query<{ id: string }>(
+      `SELECT id FROM carts WHERE status = 'checked_out' AND updated_at < ?`,
+      [cutoff]
+    );
+
+    if (staleCarts.length === 0) return 0;
+
+    const cartIds = staleCarts.map((c) => c.id);
+    const placeholders = cartIds.map(() => '?').join(',');
+
+    const reservedItems = this.query<{ sku: string; qty: number }>(
+      `SELECT sku, SUM(qty) as qty FROM cart_items WHERE cart_id IN (${placeholders}) GROUP BY sku`,
+      cartIds
+    );
+
+    for (const item of reservedItems) {
+      this.run(`UPDATE inventory SET reserved = MAX(reserved - ?, 0) WHERE sku = ?`, [item.qty, item.sku]);
+    }
+
+    this.run(`UPDATE carts SET status = 'expired' WHERE id IN (${placeholders})`, cartIds);
+    // Note: cart_items are intentionally NOT deleted here (unlike
+    // cleanupExpiredCarts below) — a payment webhook can still arrive after
+    // this sweep, and createOrderFromCart needs them to build that order.
+
+    return staleCarts.length;
   }
 
   async cleanupExpiredCarts(): Promise<number> {

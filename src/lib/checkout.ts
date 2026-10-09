@@ -38,7 +38,7 @@ const PROVIDER_CURRENCIES: Record<string, string[]> = {
 // Used to validate the set-currency route without duplicating this list.
 export const SUPPORTED_CURRENCIES = [
   ...new Set(Object.values(PROVIDER_CURRENCIES).flat()),
-] as const;
+] as [string, ...string[]];
 
 export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
 
@@ -314,10 +314,22 @@ export async function prepareCheckout(
 // Stores the shipping address on the cart before checkout so it's available
 // to any payment provider and to the order creation handler.
 
+// Matches what SetShippingBody (routes/checkout.ts) actually infers from Zod:
+// optional+nullable fields come through as `T | null | undefined`, not `T | null`.
+export interface SetShippingInput {
+  name?:        string | null;
+  line1:        string;
+  line2?:       string | null;
+  city:         string;
+  state?:       string | null;
+  postal_code:  string;
+  country:      string;
+}
+
 export async function setCartShipping(
   db: Database,
   cartId: string,
-  address: Omit<ShippingAddress, 'name'> & { name?: string | null }
+  address: SetShippingInput
 ): Promise<void> {
   const { name, ...addressFields } = address;
 
