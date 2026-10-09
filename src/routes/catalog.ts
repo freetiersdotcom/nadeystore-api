@@ -101,8 +101,18 @@ app.openapi(listProducts, async (c) => {
 
   if (productIds.length > 0) {
     const placeholders = productIds.map(() => '?').join(',');
+    // Stock only means something for physical goods — digital variants are
+    // always available regardless of their inventory row (every variant gets
+    // one at creation, defaulting to on_hand: 0, which would otherwise make
+    // brand-new digital products wrongly show as out of stock).
     const allVariants = await db.query<any>(
-      `SELECT * FROM variants WHERE product_id IN (${placeholders}) ORDER BY created_at ASC`,
+      `SELECT v.*,
+         CASE WHEN v.product_type = 'digital' THEN 1
+              ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
+         END as in_stock
+       FROM variants v
+       LEFT JOIN inventory i ON i.sku = v.sku
+       WHERE v.product_id IN (${placeholders}) ORDER BY v.created_at ASC`,
       productIds
     );
 
@@ -133,6 +143,7 @@ app.openapi(listProducts, async (c) => {
       weight_g: v.weight_g,
       product_type: v.product_type,
       digital_asset_key: v.digital_asset_key,
+      in_stock: !!v.in_stock,
     })),
   }));
 
@@ -162,7 +173,12 @@ app.openapi(getProduct, async (c) => {
   if (!product) throw ApiError.notFound('Product not found');
 
   const variants = await db.query<any>(
-    `SELECT * FROM variants WHERE product_id = ? ORDER BY created_at ASC`,
+    `SELECT v.*,
+       CASE WHEN v.product_type = 'digital' THEN 1
+            ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
+       END as in_stock
+     FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
+     WHERE v.product_id = ? ORDER BY v.created_at ASC`,
     [id]
   );
 
@@ -185,6 +201,7 @@ app.openapi(getProduct, async (c) => {
       weight_g: v.weight_g,
       product_type: v.product_type,
       digital_asset_key: v.digital_asset_key,
+      in_stock: !!v.in_stock,
     })),
   }, 200);
 });
@@ -293,7 +310,15 @@ app.openapi(updateProduct, async (c) => {
   }
 
   const [product] = await db.query<any>(`SELECT * FROM products WHERE id = ?`, [id]);
-  const variants = await db.query<any>(`SELECT * FROM variants WHERE product_id = ?`, [id]);
+  const variants = await db.query<any>(
+    `SELECT v.*,
+       CASE WHEN v.product_type = 'digital' THEN 1
+            ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
+       END as in_stock
+     FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
+     WHERE v.product_id = ?`,
+    [id]
+  );
 
   return c.json({
     id: product.id,
@@ -314,6 +339,7 @@ app.openapi(updateProduct, async (c) => {
       weight_g: v.weight_g,
       product_type: v.product_type,
       digital_asset_key: v.digital_asset_key,
+      in_stock: !!v.in_stock,
     })),
   }, 200);
 });
@@ -408,7 +434,11 @@ app.openapi(createVariant, async (c) => {
     [uuid(), sku, timestamp]
   );
 
-  return c.json({ id, sku, title, price_cents, image_url: image_url || null, weight_g, product_type, digital_asset_key: null }, 201);
+  return c.json({
+    id, sku, title, price_cents, image_url: image_url || null, weight_g, product_type,
+    digital_asset_key: null,
+    in_stock: product_type === 'digital', // new variants start at on_hand: 0
+  }, 201);
 });
 
 const updateVariant = createRoute({
@@ -482,7 +512,15 @@ app.openapi(updateVariant, async (c) => {
     await db.run(`UPDATE variants SET ${updates.join(', ')} WHERE id = ?`, params);
   }
 
-  const [variant] = await db.query<any>(`SELECT * FROM variants WHERE id = ?`, [variantId]);
+  const [variant] = await db.query<any>(
+    `SELECT v.*,
+       CASE WHEN v.product_type = 'digital' THEN 1
+            ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
+       END as in_stock
+     FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
+     WHERE v.id = ?`,
+    [variantId]
+  );
 
   return c.json({
     id: variant.id,
@@ -493,6 +531,7 @@ app.openapi(updateVariant, async (c) => {
     weight_g: variant.weight_g,
     product_type: variant.product_type,
     digital_asset_key: variant.digital_asset_key,
+    in_stock: !!variant.in_stock,
   }, 200);
 });
 

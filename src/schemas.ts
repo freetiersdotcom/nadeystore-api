@@ -42,6 +42,7 @@ export const VariantResponse = z.object({
   price_cents: z.number().int().openapi({ example: 1499 }),
   image_url: z.string().nullable().openapi({ example: 'https://example.com/image.jpg' }),
   weight_g: z.number().int().openapi({ example: 0, description: 'Weight in grams. 0 for digital products.' }),
+  in_stock: z.boolean().openapi({ description: 'Always true for digital variants; reflects on_hand minus reserved for physical ones.' }),
   product_type: ProductType,
   /** Only present for digital variants — the R2 object key */
   digital_asset_key: z.string().nullable().openapi({
