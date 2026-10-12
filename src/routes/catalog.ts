@@ -133,6 +133,7 @@ app.openapi(listProducts, async (c) => {
     description_fr: p.description_fr,
     description_en: p.description_en,
     tags: p.tags ? JSON.parse(p.tags) : null,
+    video_url: p.video_url ?? null,
     status: p.status,
     created_at: p.created_at,
     variants: (variantsByProduct[p.id] || []).map((v) => ({
@@ -191,6 +192,7 @@ app.openapi(getProduct, async (c) => {
     description_fr: product.description_fr,
     description_en: product.description_en,
     tags: product.tags ? JSON.parse(product.tags) : null,
+    video_url: product.video_url ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
@@ -222,7 +224,7 @@ const createProduct = createRoute({
 });
 
 app.openapi(createProduct, async (c) => {
-  const { title, description, slug, description_fr, description_en, tags } = c.req.valid('json');
+  const { title, description, slug, description_fr, description_en, tags, video_url } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const id = uuid();
@@ -230,10 +232,10 @@ app.openapi(createProduct, async (c) => {
   const finalSlug = await uniqueSlug(db, slug ? slugify(slug) : slugify(title));
 
   await db.run(
-    `INSERT INTO products (id, title, description, slug, description_fr, description_en, tags, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+    `INSERT INTO products (id, title, description, slug, description_fr, description_en, tags, video_url, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
     [id, title, description || null, finalSlug, description_fr || null, description_en || null,
-     tags ? JSON.stringify(tags) : null, timestamp]
+     tags ? JSON.stringify(tags) : null, video_url || null, timestamp]
   );
 
   await requestSiteRebuild(c.var.db);
@@ -242,7 +244,7 @@ app.openapi(createProduct, async (c) => {
     {
       id, title, description: description || null, slug: finalSlug,
       description_fr: description_fr || null, description_en: description_en || null,
-      tags: tags || null,
+      tags: tags || null, video_url: video_url || null,
       status: 'active' as const, created_at: timestamp, variants: [],
     },
     201
@@ -302,6 +304,10 @@ app.openapi(updateProduct, async (c) => {
     updates.push('tags = ?');
     params.push(body.tags ? JSON.stringify(body.tags) : null);
   }
+  if (body.video_url !== undefined) {
+    updates.push('video_url = ?');
+    params.push(body.video_url || null);
+  }
   if (body.status !== undefined) {
     updates.push('status = ?');
     params.push(body.status);
@@ -333,6 +339,7 @@ app.openapi(updateProduct, async (c) => {
     description_fr: product.description_fr,
     description_en: product.description_en,
     tags: product.tags ? JSON.parse(product.tags) : null,
+    video_url: product.video_url ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({

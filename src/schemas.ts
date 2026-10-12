@@ -120,6 +120,10 @@ export const SetupEmailBody = z.object({
 
 export const ProductStatus = z.enum(['active', 'draft']);
 
+// Product video: a link, not an upload. YouTube / TikTok / Facebook pages and direct
+// .mp4/.webm files are recognised by the frontstore; anything else is shown as a plain link.
+const VideoUrl = z.string().trim().max(500).regex(/^https:\/\//, 'video_url must be an https:// URL');
+
 export const ProductResponse = z.object({
   id: z.string().uuid(),
   title: z.string().openapi({ example: 'Classic T-Shirt' }),
@@ -128,6 +132,7 @@ export const ProductResponse = z.object({
   description_fr: z.string().nullable(),
   description_en: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
+  video_url: z.string().nullable(),
   status: ProductStatus,
   created_at: z.string().datetime(),
   variants: z.array(VariantResponse),
@@ -146,6 +151,7 @@ export const CreateProductBody = z.object({
   description_fr: z.string().optional(),
   description_en: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  video_url: VideoUrl.optional(),
 }).openapi('CreateProduct');
 
 export const UpdateProductBody = z.object({
@@ -155,6 +161,7 @@ export const UpdateProductBody = z.object({
   description_fr: z.string().nullable().optional(),
   description_en: z.string().nullable().optional(),
   tags: z.array(z.string()).nullable().optional(),
+  video_url: VideoUrl.nullable().optional(),
   status: ProductStatus.optional(),
 }).openapi('UpdateProduct');
 
