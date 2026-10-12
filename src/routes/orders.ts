@@ -8,12 +8,16 @@ import { validateDiscount, calculateDiscount, type Discount } from './discounts'
 import { dispatchWebhooks, type WebhookEventType } from '../lib/webhooks';
 import {
   OrderIdParam,
+  OrderStatus,
   OrderResponse,
   OrderListResponse,
   OrderQuery,
   UpdateOrderBody,
   RefundOrderBody,
   RefundResponse,
+  ManualRefundBody,
+  ManualRefundResponse,
+  RefundListResponse,
   CreateTestOrderBody,
   ErrorResponse,
 } from '../schemas';
@@ -297,6 +301,142 @@ app.openapi(refundOrder, async (c) => {
   } catch (e: any) {
     throw ApiError.stripeError(e.message || 'Refund failed');
   }
+});
+
+const REFUNDABLE_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+
+async function refundTotals(db: ReturnType<typeof getDb>, orderId: string, totalCents: number) {
+  const [row] = await db.query<{ refunded: number }>(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS refunded FROM refunds WHERE order_id = ? AND status != 'failed'`,
+    [orderId]
+  );
+  const refunded = Number(row?.refunded ?? 0);
+  return { refunded, remaining: Math.max(totalCents - refunded, 0) };
+}
+
+function formatRefund(r: any) {
+  return {
+    id: r.id as string,
+    source: (r.source === 'manual' ? 'manual' : 'stripe') as 'stripe' | 'manual',
+    method: (r.method ?? null) as string | null,
+    reference: (r.reference ?? null) as string | null,
+    note: (r.note ?? null) as string | null,
+    amount_cents: Number(r.amount_cents),
+    status: r.status as string,
+    created_at: r.created_at as string,
+  };
+}
+
+const listOrderRefunds = createRoute({
+  method: 'get',
+  path: '/{orderId}/refunds',
+  tags: ['Orders'],
+  summary: 'List refunds recorded for an order',
+  security: [{ bearerAuth: [] }],
+  middleware: [adminOnly] as const,
+  request: { params: OrderIdParam },
+  responses: {
+    200: { content: { 'application/json': { schema: RefundListResponse } }, description: 'Refunds' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Order not found' },
+  },
+});
+
+app.openapi(listOrderRefunds, async (c) => {
+  const { orderId } = c.req.valid('param');
+  const db = getDb(c.var.db);
+
+  const [order] = await db.query<any>(`SELECT id, total_cents FROM orders WHERE id = ?`, [orderId]);
+  if (!order) throw ApiError.notFound('Order not found');
+
+  const rows = await db.query<any>(
+    `SELECT * FROM refunds WHERE order_id = ? ORDER BY created_at DESC`,
+    [orderId]
+  );
+  const { refunded, remaining } = await refundTotals(db, orderId, order.total_cents);
+
+  return c.json(
+    { items: rows.map(formatRefund), refunded_cents: refunded, remaining_cents: remaining },
+    200
+  );
+});
+
+const recordManualRefund = createRoute({
+  method: 'post',
+  path: '/{orderId}/refunds/manual',
+  tags: ['Orders'],
+  summary: 'Record a refund made outside the API',
+  description:
+    'Records a refund the merchant already paid out by hand (e.g. FedaPay dashboard MTN MoMo refund, ' +
+    'mobile money or bank transfer). No call is made to any payment provider.',
+  security: [{ bearerAuth: [] }],
+  middleware: [adminOnly] as const,
+  request: {
+    params: OrderIdParam,
+    body: { content: { 'application/json': { schema: ManualRefundBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: ManualRefundResponse } }, description: 'Refund recorded' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid amount or order state' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Order not found' },
+    409: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Already fully refunded' },
+  },
+});
+
+app.openapi(recordManualRefund, async (c) => {
+  const { orderId } = c.req.valid('param');
+  const { amount_cents, method, reference, note } = c.req.valid('json');
+  const db = getDb(c.var.db);
+
+  const [order] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
+  if (!order) throw ApiError.notFound('Order not found');
+  if (order.status === 'refunded') throw ApiError.conflict('Order already refunded');
+  if (!REFUNDABLE_STATUSES.includes(order.status)) {
+    throw ApiError.invalidRequest(`Cannot record a refund for an order with status "${order.status}"`);
+  }
+
+  const { refunded, remaining } = await refundTotals(db, orderId, order.total_cents);
+  if (remaining <= 0) throw ApiError.conflict('Order already fully refunded');
+
+  const amount = amount_cents ?? remaining;
+  if (amount > remaining) {
+    throw ApiError.invalidRequest(`Amount exceeds the refundable balance (${remaining})`);
+  }
+
+  const id = uuid();
+  await db.run(
+    `INSERT INTO refunds (id, order_id, stripe_refund_id, amount_cents, status, source, method, reference, note)
+     VALUES (?, ?, ?, ?, 'succeeded', 'manual', ?, ?, ?)`,
+    [id, order.id, `manual_${id}`, amount, method, reference ?? null, note ?? null]
+  );
+
+  const newRefunded = refunded + amount;
+  const fullyRefunded = newRefunded >= order.total_cents;
+  let orderStatus: string = order.status;
+
+  if (fullyRefunded) {
+    // A full refund also closes any pending manual-review flag.
+    await db.run(`UPDATE orders SET status = 'refunded', needs_review = 0 WHERE id = ?`, [orderId]);
+    orderStatus = 'refunded';
+
+    const [refundedOrder] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
+    const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [orderId]);
+    await dispatchWebhooks(c.var.db, c.executionCtx, 'order.refunded', {
+      order: formatOrder(refundedOrder, orderItems),
+      refund: { manual: true, method, amount_cents: amount },
+    });
+  }
+
+  const [row] = await db.query<any>(`SELECT * FROM refunds WHERE id = ?`, [id]);
+
+  return c.json(
+    {
+      refund: formatRefund(row),
+      order_status: orderStatus as z.infer<typeof OrderStatus>,
+      refunded_cents: newRefunded,
+      remaining_cents: Math.max(order.total_cents - newRefunded, 0),
+    },
+    200
+  );
 });
 
 const createTestOrder = createRoute({

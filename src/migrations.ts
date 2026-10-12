@@ -85,6 +85,10 @@ ALTER TABLE products ADD COLUMN slug TEXT;
 ALTER TABLE products ADD COLUMN description_fr TEXT;
 ALTER TABLE products ADD COLUMN description_en TEXT;
 ALTER TABLE products ADD COLUMN tags TEXT;
+ALTER TABLE refunds ADD COLUMN source TEXT NOT NULL DEFAULT 'stripe';
+ALTER TABLE refunds ADD COLUMN method TEXT;
+ALTER TABLE refunds ADD COLUMN reference TEXT;
+ALTER TABLE refunds ADD COLUMN note TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL
 `;
 

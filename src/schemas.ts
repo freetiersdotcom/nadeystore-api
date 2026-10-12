@@ -377,6 +377,46 @@ export const RefundResponse = z.object({
   status: z.string(),
 }).openapi('RefundResult');
 
+export const RefundMethod = z.enum([
+  'mtn_momo_dashboard',
+  'mobile_money_transfer',
+  'bank_transfer',
+  'card_dashboard',
+  'cash',
+  'other',
+]);
+
+export const ManualRefundBody = z.object({
+  amount_cents: z.number().int().positive().optional().openapi({ description: 'Omit to refund the remaining balance' }),
+  method: RefundMethod,
+  reference: z.string().trim().max(200).optional().openapi({ description: 'Provider transaction ID, transfer reference, etc.' }),
+  note: z.string().trim().max(500).optional(),
+}).openapi('ManualRefund');
+
+export const RefundRecord = z.object({
+  id: z.string(),
+  source: z.enum(['stripe', 'manual']),
+  method: z.string().nullable(),
+  reference: z.string().nullable(),
+  note: z.string().nullable(),
+  amount_cents: z.number().int(),
+  status: z.string(),
+  created_at: z.string(),
+}).openapi('RefundRecord');
+
+export const RefundListResponse = z.object({
+  items: z.array(RefundRecord),
+  refunded_cents: z.number().int(),
+  remaining_cents: z.number().int(),
+}).openapi('RefundList');
+
+export const ManualRefundResponse = z.object({
+  refund: RefundRecord,
+  order_status: OrderStatus,
+  refunded_cents: z.number().int(),
+  remaining_cents: z.number().int(),
+}).openapi('ManualRefundResult');
+
 export const CreateTestOrderBody = z.object({
   customer_email: z.string().email().openapi({ example: 'test@example.com' }),
   items: z.array(z.object({
