@@ -3,6 +3,7 @@ import { z } from '@hono/zod-openapi';
 import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
+import { requestSiteRebuild } from '../lib/rebuild';
 import {
   IdParam,
   ProductResponse,
@@ -235,6 +236,8 @@ app.openapi(createProduct, async (c) => {
      tags ? JSON.stringify(tags) : null, timestamp]
   );
 
+  await requestSiteRebuild(c.var.db);
+
   return c.json(
     {
       id, title, description: description || null, slug: finalSlug,
@@ -320,6 +323,8 @@ app.openapi(updateProduct, async (c) => {
     [id]
   );
 
+  await requestSiteRebuild(c.var.db);
+
   return c.json({
     id: product.id,
     title: product.title,
@@ -388,6 +393,8 @@ app.openapi(deleteProduct, async (c) => {
   await db.run(`DELETE FROM variants WHERE product_id = ?`, [id]);
   await db.run(`DELETE FROM products WHERE id = ?`, [id]);
 
+  await requestSiteRebuild(c.var.db);
+
   return c.json({ deleted: true as const }, 200);
 });
 
@@ -433,6 +440,8 @@ app.openapi(createVariant, async (c) => {
     `INSERT INTO inventory (id, sku, on_hand, reserved, updated_at) VALUES (?, ?, 0, 0, ?)`,
     [uuid(), sku, timestamp]
   );
+
+  await requestSiteRebuild(c.var.db);
 
   return c.json({
     id, sku, title, price_cents, image_url: image_url || null, weight_g, product_type,
@@ -522,6 +531,8 @@ app.openapi(updateVariant, async (c) => {
     [variantId]
   );
 
+  await requestSiteRebuild(c.var.db);
+
   return c.json({
     id: variant.id,
     sku: variant.sku,
@@ -567,6 +578,8 @@ app.openapi(deleteVariant, async (c) => {
 
   await db.run(`DELETE FROM inventory WHERE sku = ?`, [variant.sku]);
   await db.run(`DELETE FROM variants WHERE id = ?`, [variantId]);
+
+  await requestSiteRebuild(c.var.db);
 
   return c.json({ deleted: true as const }, 200);
 });

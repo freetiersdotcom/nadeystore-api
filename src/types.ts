@@ -10,12 +10,17 @@ export type Env = {
   STRIPE_WEBHOOK_SECRET?: string;
   /** One-time secret required to call POST /v1/setup/init. Set via `wrangler secret put SETUP_TOKEN`. */
   SETUP_TOKEN?: string;
+  /** Optional Cloudflare Workers Builds deploy-hook URL; when set, catalog edits trigger a (debounced) frontstore rebuild. Set via `wrangler secret put REBUILD_HOOK_URL`. */
+  REBUILD_HOOK_URL?: string;
+  /** Seconds to wait after the first catalog edit before triggering the rebuild (default 60, minimum 10). */
+  REBUILD_DEBOUNCE_SECONDS?: string;
 };
 
 export type DOStub = {
   query: <T = unknown>(sql: string, params: unknown[]) => Promise<T[]>;
   run: (sql: string, params: unknown[]) => Promise<{ changes: number }>;
   broadcast: (event: { type: string; data: unknown; timestamp: string }) => void;
+  scheduleRebuild: () => Promise<void>;
 };
 
 export type Variables = {

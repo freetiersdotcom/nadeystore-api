@@ -8,6 +8,8 @@ export interface MerchantEnv {
   STORE_NAME?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  REBUILD_HOOK_URL?: string;
+  REBUILD_DEBOUNCE_SECONDS?: string;
 }
 
 export type WSEventType =
@@ -385,7 +387,66 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     }
 
 
+    this.backfillProductSlugs();
+
     this.initialized = true;
+  }
+
+  // Products created before slugs existed have slug = NULL and would be served
+  // at /fr/produits/<uuid>. Give each one a readable, unique slug (idempotent).
+  private backfillProductSlugs(): void {
+    try {
+      const rows = this.sql
+        .exec(`SELECT id, title FROM products WHERE slug IS NULL OR slug = ''`)
+        .toArray() as { id: string; title: string }[];
+      for (const row of rows) {
+        const base =
+          (row.title || '')
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 80) || 'product';
+        let candidate = base;
+        let suffix = 2;
+        while (
+          this.sql.exec(`SELECT 1 FROM products WHERE slug = ? AND id != ?`, candidate, row.id).toArray().length > 0
+        ) {
+          candidate = `${base}-${suffix++}`;
+        }
+        this.sql.exec(`UPDATE products SET slug = ? WHERE id = ?`, candidate, row.id);
+      }
+    } catch (err) {
+      console.error('[ensureInitialized] slug backfill failed', err);
+    }
+  }
+
+  // ── Debounced frontstore rebuild (rebuild-on-webhook mode) ─────────────
+  // The first catalog edit arms an alarm; edits made before it fires are
+  // covered by the same rebuild. Does nothing unless REBUILD_HOOK_URL is set.
+  async scheduleRebuild(): Promise<void> {
+    if (!this.env.REBUILD_HOOK_URL) return;
+    if ((await this.ctx.storage.getAlarm()) !== null) return;
+    const seconds = Math.max(10, parseInt(this.env.REBUILD_DEBOUNCE_SECONDS ?? '60', 10) || 60);
+    await this.ctx.storage.put('rebuild_attempts', 0);
+    await this.ctx.storage.setAlarm(Date.now() + seconds * 1000);
+  }
+
+  async alarm(): Promise<void> {
+    const url = this.env.REBUILD_HOOK_URL;
+    if (!url) return;
+    const attempts = ((await this.ctx.storage.get<number>('rebuild_attempts')) ?? 0) + 1;
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) throw new Error(`Deploy hook responded ${res.status}`);
+      console.log('[rebuild] deploy hook triggered');
+    } catch (err) {
+      console.error(`[rebuild] deploy hook failed (attempt ${attempts})`, err);
+      if (attempts < 3) {
+        await this.ctx.storage.put('rebuild_attempts', attempts);
+        await this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000);
+      }
+    }
   }
 
   async fetch(request: Request): Promise<Response> {

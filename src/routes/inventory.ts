@@ -3,6 +3,7 @@ import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
 import { checkLowInventory } from '../lib/webhooks';
+import { requestSiteRebuild } from '../lib/rebuild';
 import {
   InventoryQuery,
   InventoryListResponse,
@@ -175,6 +176,8 @@ app.openapi(adjustInventory, async (c) => {
   const available = level.on_hand - level.reserved;
 
   await checkLowInventory(c.var.db, c.executionCtx, sku, available);
+
+  await requestSiteRebuild(c.var.db);
 
   return c.json({
     sku: level.sku,
