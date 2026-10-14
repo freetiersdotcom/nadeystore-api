@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expire
 // See the MIGRATIONS constant below for the exact statements to use.
 
 export const MIGRATIONS = `
-ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CHECK (product_type IN ('physical', 'digital'));
+ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CHECK (product_type IN ('physical', 'digital', 'service'));
 ALTER TABLE variants ADD COLUMN digital_asset_key TEXT;
 ALTER TABLE variants ADD COLUMN updated_at TEXT;
 ALTER TABLE carts ADD COLUMN ship_to TEXT;
@@ -86,6 +86,8 @@ ALTER TABLE products ADD COLUMN description_fr TEXT;
 ALTER TABLE products ADD COLUMN description_en TEXT;
 ALTER TABLE products ADD COLUMN tags TEXT;
 ALTER TABLE products ADD COLUMN video_url TEXT;
+ALTER TABLE orders ADD COLUMN service_status TEXT;
+ALTER TABLE orders ADD COLUMN service_note TEXT;
 ALTER TABLE refunds ADD COLUMN source TEXT NOT NULL DEFAULT 'stripe';
 ALTER TABLE refunds ADD COLUMN method TEXT;
 ALTER TABLE refunds ADD COLUMN reference TEXT;

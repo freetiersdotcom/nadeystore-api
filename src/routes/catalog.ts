@@ -108,7 +108,7 @@ app.openapi(listProducts, async (c) => {
     // brand-new digital products wrongly show as out of stock).
     const allVariants = await db.query<any>(
       `SELECT v.*,
-         CASE WHEN v.product_type = 'digital' THEN 1
+         CASE WHEN v.product_type IN ('digital', 'service') THEN 1
               ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
          END as in_stock
        FROM variants v
@@ -176,7 +176,7 @@ app.openapi(getProduct, async (c) => {
 
   const variants = await db.query<any>(
     `SELECT v.*,
-       CASE WHEN v.product_type = 'digital' THEN 1
+       CASE WHEN v.product_type IN ('digital', 'service') THEN 1
             ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
        END as in_stock
      FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
@@ -321,7 +321,7 @@ app.openapi(updateProduct, async (c) => {
   const [product] = await db.query<any>(`SELECT * FROM products WHERE id = ?`, [id]);
   const variants = await db.query<any>(
     `SELECT v.*,
-       CASE WHEN v.product_type = 'digital' THEN 1
+       CASE WHEN v.product_type IN ('digital', 'service') THEN 1
             ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
        END as in_stock
      FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
@@ -453,7 +453,7 @@ app.openapi(createVariant, async (c) => {
   return c.json({
     id, sku, title, price_cents, image_url: image_url || null, weight_g, product_type,
     digital_asset_key: null,
-    in_stock: product_type === 'digital', // new variants start at on_hand: 0
+    in_stock: product_type !== 'physical', // new variants start at on_hand: 0 (digital/service never need stock)
   }, 201);
 });
 
@@ -530,7 +530,7 @@ app.openapi(updateVariant, async (c) => {
 
   const [variant] = await db.query<any>(
     `SELECT v.*,
-       CASE WHEN v.product_type = 'digital' THEN 1
+       CASE WHEN v.product_type IN ('digital', 'service') THEN 1
             ELSE CASE WHEN COALESCE(i.on_hand, 0) - COALESCE(i.reserved, 0) > 0 THEN 1 ELSE 0 END
        END as in_stock
      FROM variants v LEFT JOIN inventory i ON i.sku = v.sku

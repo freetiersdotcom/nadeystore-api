@@ -30,8 +30,8 @@ export const ErrorResponse = z.object({
 // VARIANT SCHEMAS
 // ============================================================
 
-export const ProductType = z.enum(['physical', 'digital']).openapi({
-  description: '"physical" ships as a physical good; "digital" is a downloadable asset delivered via secure link.',
+export const ProductType = z.enum(['physical', 'digital', 'service']).openapi({
+  description: '"physical" ships as a physical good; "digital" is a downloadable asset delivered via secure link; "service" (coaching, consultation…) needs no stock and no shipping and is scheduled manually after purchase.',
 });
 
 // Extended variant response (replace VariantResponse in schemas.ts)
@@ -303,11 +303,16 @@ export const CartIdParam = z.object({
 
 export const OrderStatus = z.enum(['pending', 'paid', 'processing', 'shipped', 'delivered', 'refunded', 'canceled']);
 
+export const ServiceStatus = z.enum(['to_schedule', 'scheduled', 'completed']).openapi({
+  description: 'Manual follow-up of the service part of an order. Null when the order has no service item.',
+});
+
 export const OrderItem = z.object({
   sku: z.string(),
   title: z.string(),
   qty: z.number().int(),
   unit_price_cents: z.number().int(),
+  product_type: ProductType.optional(),
 });
 
 export const ShippingAddress = z.object({
@@ -325,6 +330,8 @@ export const OrderResponse = z.object({
   status: OrderStatus,
   needs_review: z.boolean().optional(),
   review_reason: z.string().nullable().optional(),
+  service_status: ServiceStatus.nullable().optional(),
+  service_note: z.string().nullable().optional(),
   customer_email: z.string().email(),
   customer_id: z.string().uuid().nullable(),
   shipping: z.object({
@@ -366,6 +373,7 @@ export const OrderQuery = PaginationQuery.extend({
   status: OrderStatus.optional().openapi({ param: { name: 'status', in: 'query' } }),
   email: z.string().email().optional().openapi({ param: { name: 'email', in: 'query' } }),
   needs_review: z.coerce.boolean().optional().openapi({ param: { name: 'needs_review', in: 'query' } }),
+  service_status: ServiceStatus.optional().openapi({ param: { name: 'service_status', in: 'query' } }),
 });
 
 export const UpdateOrderBody = z.object({
@@ -373,6 +381,8 @@ export const UpdateOrderBody = z.object({
   tracking_number: z.string().nullable().optional(),
   tracking_url: z.string().url().nullable().optional(),
   needs_review: z.boolean().optional(),
+  service_status: ServiceStatus.optional(),
+  service_note: z.string().max(2000).nullable().optional(),
 }).openapi('UpdateOrder');
 
 export const RefundOrderBody = z.object({

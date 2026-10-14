@@ -387,9 +387,50 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
     }
 
 
+    this.allowServiceVariants();
     this.backfillProductSlugs();
 
     this.initialized = true;
+  }
+
+  // The first version of variants.product_type was created with
+  // CHECK (product_type IN ('physical', 'digital')). SQLite cannot alter a CHECK
+  // constraint, so on databases created before 'service' existed we rebuild the
+  // table once with the widened constraint. Idempotent: does nothing once the
+  // stored table definition already mentions 'service'. Nothing references
+  // variants(id), so a drop/rename is safe.
+  private allowServiceVariants(): void {
+    try {
+      const rows = this.sql
+        .exec(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'variants'`)
+        .toArray() as { sql: string }[];
+      const ddl = rows[0]?.sql;
+      if (!ddl || ddl.includes("'service'")) return;
+
+      const widened = ddl
+        .replace(
+          /CHECK\s*\(\s*product_type\s+IN\s*\(\s*'physical'\s*,\s*'digital'\s*\)\s*\)/i,
+          "CHECK (product_type IN ('physical', 'digital', 'service'))"
+        )
+        .replace(/^CREATE TABLE\s+(IF NOT EXISTS\s+)?["`]?variants["`]?/i, 'CREATE TABLE variants__new');
+      if (!widened.includes("'service'") || !widened.includes('variants__new')) {
+        console.error('[ensureInitialized] could not widen variants.product_type CHECK');
+        return;
+      }
+
+      this.ctx.storage.transactionSync(() => {
+        this.sql.exec(`DROP TABLE IF EXISTS variants__new`);
+        this.sql.exec(widened);
+        this.sql.exec(`INSERT INTO variants__new SELECT * FROM variants`);
+        this.sql.exec(`DROP TABLE variants`);
+        this.sql.exec(`ALTER TABLE variants__new RENAME TO variants`);
+        this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_variants_sku ON variants(sku)`);
+        this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_variants_product ON variants(product_id)`);
+        this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_variants_status ON variants(status)`);
+      });
+    } catch (err) {
+      console.error('[ensureInitialized] variants service migration failed', err);
+    }
   }
 
   // Products created before slugs existed have slug = NULL and would be served

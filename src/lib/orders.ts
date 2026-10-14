@@ -217,7 +217,7 @@ export async function createOrderFromCart(
     title:           string;
     qty:             number;
     unit_price_cents: number;
-    product_type:    'physical' | 'digital';
+    product_type:    'physical' | 'digital' | 'service';
   }> = [];
 
   for (const item of items) {
@@ -226,6 +226,27 @@ export async function createOrderFromCart(
        VALUES (?, ?, ?, ?, ?, ?)`,
       [uuid(), orderId, item.sku, item.title, item.qty, item.unit_price_cents]
     );
+
+    // Digital downloads and services have no stock: nothing was reserved at
+    // checkout, so there is nothing to decrement or log.
+    const [itemVariant] = await db.query<{
+      product_type:      'physical' | 'digital' | 'service';
+      digital_asset_key: string | null;
+    }>(
+      `SELECT product_type, digital_asset_key FROM variants WHERE sku = ? LIMIT 1`,
+      [item.sku]
+    );
+    const itemType = itemVariant?.product_type ?? 'physical';
+
+    itemsWithType.push({
+      sku:             item.sku,
+      title:           item.title,
+      qty:             item.qty,
+      unit_price_cents: item.unit_price_cents,
+      product_type:    itemType,
+    });
+
+    if (itemType !== 'physical') continue;
 
     // The sale always happened — on_hand is decremented either way. The
     // reservation, though, was already released by the abandonment sweep
@@ -252,21 +273,6 @@ export async function createOrderFromCart(
       [uuid(), item.sku, -item.qty]
     );
 
-    const [variant] = await db.query<{
-      product_type:      'physical' | 'digital';
-      digital_asset_key: string | null;
-    }>(
-      `SELECT product_type, digital_asset_key FROM variants WHERE sku = ? LIMIT 1`,
-      [item.sku]
-    );
-
-    itemsWithType.push({
-      sku:             item.sku,
-      title:           item.title,
-      qty:             item.qty,
-      unit_price_cents: item.unit_price_cents,
-      product_type:    variant?.product_type ?? 'physical',
-    });
   }
 
   // ── Generate download tokens for digital items ────────────────────────────
@@ -279,6 +285,12 @@ export async function createOrderFromCart(
       orderId,
       digitalItems.map(i => ({ sku: i.sku }))
     );
+  }
+
+  // ── Services: flag the order for manual scheduling ────────────────────────
+  const hasService = itemsWithType.some(i => i.product_type === 'service');
+  if (hasService) {
+    await db.run(`UPDATE orders SET service_status = 'to_schedule' WHERE id = ?`, [orderId]);
   }
 
   // ── Mark cart as fully processed ──────────────────────────────────────────
@@ -357,6 +369,7 @@ export async function createOrderFromCart(
       number:         orderNumber,
       status:         'paid',
       needs_review:   needsReview,
+      service_status: hasService ? 'to_schedule' : null,
       customer_email: customerEmail,
       customer_id:    customerId,
       provider:       ctx_order.provider,
@@ -378,6 +391,7 @@ export async function createOrderFromCart(
         title:           i.title,
         qty:             i.qty,
         unit_price_cents: i.unit_price_cents,
+        product_type:    itemsWithType.find((t) => t.sku === i.sku)?.product_type ?? 'physical',
       })),
     },
   });

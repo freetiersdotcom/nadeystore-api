@@ -36,11 +36,14 @@ const PROVIDER_CURRENCIES: Record<string, string[]> = {
 
 // Flat union of all currencies known to any provider.
 // Used to validate the set-currency route without duplicating this list.
-export const SUPPORTED_CURRENCIES = [
-  ...new Set(Object.values(PROVIDER_CURRENCIES).flat()),
-] as [string, ...string[]];
+// export const SUPPORTED_CURRENCIES = [
+//   ...new Set(Object.values(PROVIDER_CURRENCIES).flat()),
+// ] as const;
+//
+// export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
 
-export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
+export const SUPPORTED_CURRENCIES = [...new Set(Object.values(PROVIDER_CURRENCIES).flat())] as [string, ...string[]];
+export type SupportedCurrency = string;
 
 export interface PreparedCheckout {
   cart:                 CartRow;
@@ -195,9 +198,25 @@ export async function prepareCheckout(
   }
 
   // ── 4. Reserve inventory ──────────────────────────────────────────────────
+  // Only physical goods have stock. Digital downloads and services are never
+  // reserved (they have no on_hand to hold), so a digital/service variant with
+  // no stock entered can still be bought.
   const reservedSkus: { sku: string; qty: number }[] = [];
 
+  const skuList = items.map((i) => i.sku);
+  const typeRows = skuList.length > 0
+    ? await db.query<{ sku: string; product_type: string | null }>(
+        `SELECT sku, product_type FROM variants WHERE sku IN (${skuList.map(() => '?').join(',')})`,
+        skuList
+      )
+    : [];
+  const nonPhysical = new Set(
+    typeRows.filter((r) => (r.product_type ?? 'physical') !== 'physical').map((r) => r.sku)
+  );
+
   for (const item of items) {
+    if (nonPhysical.has(item.sku)) continue;
+
     const result = await db.run(
       `UPDATE inventory SET reserved = reserved + ?, updated_at = ?
        WHERE sku = ? AND on_hand - reserved >= ?`,

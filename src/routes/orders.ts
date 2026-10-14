@@ -22,6 +22,13 @@ import {
   ErrorResponse,
 } from '../schemas';
 
+type ProductType = 'physical' | 'digital' | 'service';
+
+// The DB column is plain TEXT; narrow it to the literal union the response schema expects.
+function toProductType(v: unknown): ProductType {
+  return v === 'digital' || v === 'service' ? v : 'physical';
+}
+
 const app = new OpenAPIHono<HonoEnv>();
 
 app.use('*', authMiddleware);
@@ -42,7 +49,7 @@ const listOrders = createRoute({
 
 app.openapi(listOrders, async (c) => {
   const db = getDb(c.var.db);
-  const { limit: limitStr, cursor, status, email, needs_review } = c.req.valid('query');
+  const { limit: limitStr, cursor, status, email, needs_review, service_status } = c.req.valid('query');
   const limit = Math.min(parseInt(limitStr || '20'), 100);
 
   let query = `SELECT * FROM orders WHERE 1=1`;
@@ -56,6 +63,11 @@ app.openapi(listOrders, async (c) => {
   if (email) {
     query += ` AND customer_email = ?`;
     params.push(email);
+  }
+
+  if (service_status) {
+    query += ` AND service_status = ?`;
+    params.push(service_status);
   }
 
   if (needs_review !== undefined) {
@@ -98,13 +110,13 @@ app.openapi(listOrders, async (c) => {
   const allSkus = [...new Set(
     Object.values(itemsByOrder).flat().map((i: any) => i.sku)
   )];
-  const variantTypeMap = new Map<string, string>();
+  const variantTypeMap = new Map<string, ProductType>();
   if (allSkus.length > 0) {
     const variantRows = await db.query<{ sku: string; product_type: string }>(
       `SELECT sku, product_type FROM variants WHERE sku IN (${allSkus.map(() => '?').join(',')})`,
       allSkus
     );
-    for (const v of variantRows) variantTypeMap.set(v.sku, v.product_type ?? 'physical');
+    for (const v of variantRows) variantTypeMap.set(v.sku, toProductType(v.product_type));
   }
 
   // Then update the items map call:
@@ -150,7 +162,7 @@ app.openapi(getOrder, async (c) => {
         skus
       )
     : [];
-  const variantTypes = new Map(variants.map(v => [v.sku, v.product_type ?? 'physical']));
+  const variantTypes = new Map<string, ProductType>(variants.map((v) => [v.sku, toProductType(v.product_type)]));
 
   return c.json(formatOrder(order, orderItems, variantTypes), 200);
 });
@@ -175,7 +187,7 @@ const updateOrder = createRoute({
 
 app.openapi(updateOrder, async (c) => {
   const { orderId } = c.req.valid('param');
-  const { status, tracking_number, tracking_url, needs_review } = c.req.valid('json');
+  const { status, tracking_number, tracking_url, needs_review, service_status, service_note } = c.req.valid('json');
   const db = getDb(c.var.db);
 
   const [order] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
@@ -212,8 +224,38 @@ app.openapi(updateOrder, async (c) => {
     }
   }
 
+  // Services: manual follow-up (to schedule → scheduled → completed).
+  if (service_status !== undefined || service_note !== undefined) {
+    if (!order.service_status) {
+      throw ApiError.invalidRequest('This order has no service to follow up');
+    }
+    if (service_status !== undefined) {
+      updates.push('service_status = ?');
+      params.push(service_status);
+    }
+    if (service_note !== undefined) {
+      updates.push('service_note = ?');
+      params.push(service_note ? service_note.trim() : null);
+    }
+  }
+
   if (updates.length === 0) {
     throw ApiError.invalidRequest('No fields to update');
+  }
+
+  // Completing the service on an order that contains nothing to ship or download
+  // closes the order (status 'delivered') so it no longer looks pending.
+  let autoDelivered = false;
+  if (service_status === 'completed' && status === undefined && ['paid', 'processing'].includes(order.status)) {
+    const kinds = await db.query<{ product_type: string }>(
+      `SELECT v.product_type FROM order_items oi JOIN variants v ON v.sku = oi.sku WHERE oi.order_id = ?`,
+      [orderId]
+    );
+    if (kinds.length > 0 && kinds.every((k) => k.product_type === 'service')) {
+      updates.push('status = ?');
+      params.push('delivered');
+      autoDelivered = true;
+    }
   }
 
   params.push(orderId);
@@ -222,6 +264,13 @@ app.openapi(updateOrder, async (c) => {
   const [updated] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
   const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [orderId]);
   const formattedOrder = formatOrder(updated, orderItems);
+
+  if (autoDelivered) {
+    await dispatchWebhooks(c.var.db, c.executionCtx, 'order.updated', {
+      order: formattedOrder,
+      previous_status: order.status,
+    });
+  }
 
   if (status !== undefined && status !== order.status) {
     let eventType: WebhookEventType = 'order.updated';
@@ -616,13 +665,15 @@ app.openapi(createTestOrder, async (c) => {
   return c.json(formatOrder(order, orderItems), 200);
 });
 
-function formatOrder(order: any, items: any[], variantTypes?: Map<string, string>) {
+function formatOrder(order: any, items: any[], variantTypes?: Map<string, ProductType>) {
   return {
     id: order.id,
     number: order.number,
     status: order.status,
     needs_review: !!order.needs_review,
     review_reason: order.review_reason ?? null,
+    service_status: order.service_status ?? null,
+    service_note: order.service_note ?? null,
     customer_email: order.customer_email,
     customer_id: order.customer_id || null,
     shipping: {
@@ -655,7 +706,7 @@ function formatOrder(order: any, items: any[], variantTypes?: Map<string, string
       title:           i.title,
       qty:             i.qty,
       unit_price_cents: i.unit_price_cents,
-      product_type:    variantTypes?.get(i.sku) ?? 'physical',
+      product_type:    (variantTypes?.get(i.sku) ?? 'physical') as ProductType,
     })),
     created_at: order.created_at,
   };
