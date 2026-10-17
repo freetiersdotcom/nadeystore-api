@@ -123,3 +123,25 @@ CREATE TABLE IF NOT EXISTS fedapay_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_fedapay_transactions_cart ON fedapay_transactions(cart_id)
 `;
+
+export const SUBMISSIONS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS submissions (
+  id         TEXT PRIMARY KEY,
+  form       TEXT NOT NULL DEFAULT 'contact',
+  name       TEXT,
+  email      TEXT,
+  phone      TEXT,
+  subject    TEXT,
+  message    TEXT NOT NULL,
+  locale     TEXT,
+  page       TEXT,
+  source     TEXT,
+  status     TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'handled')),
+  note       TEXT,
+  ip_hash    TEXT,
+  created_at TEXT NOT NULL,
+  handled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_submissions_ip ON submissions(ip_hash, created_at)
+`;

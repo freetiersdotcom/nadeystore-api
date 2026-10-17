@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { MIGRATIONS, DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA } from './migrations';
+import { MIGRATIONS, DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA, SUBMISSIONS_SCHEMA } from './migrations';
 
 export interface MerchantEnv {
   MERCHANT: DurableObjectNamespace<MerchantDO>;
@@ -372,7 +372,7 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
       }
     }
 
-	const tableMigrations = [DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA];
+	const tableMigrations = [DOWNLOAD_TOKENS_SCHEMA, FEDAPAY_TRANSACTIONS_SCHEMA, SUBMISSIONS_SCHEMA];
     for (const block of tableMigrations) {
       const stmts = block.split(';')
         .map(s => s.trim())

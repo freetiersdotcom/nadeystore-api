@@ -16,6 +16,7 @@ export function createPostmarkProvider(config: EmailConfig): EmailProvider {
           Subject: message.subject,
           HtmlBody: message.html,
           TextBody: message.text,
+          ...(message.reply_to ? { ReplyTo: message.reply_to } : {}),
           MessageStream: 'outbound',
         }),
       });

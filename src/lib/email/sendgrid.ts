@@ -12,6 +12,7 @@ export function createSendGridProvider(config: EmailConfig): EmailProvider {
         body: JSON.stringify({
           personalizations: [{ to: [{ email: message.to }] }],
           from: parseAddress(message.from ?? config.from_address),
+          ...(message.reply_to ? { reply_to: { email: message.reply_to } } : {}),
           subject: message.subject,
           content: [
             ...(message.text ? [{ type: 'text/plain', value: message.text }] : []),

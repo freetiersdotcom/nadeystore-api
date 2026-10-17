@@ -15,6 +15,7 @@ export function createResendProvider(config: EmailConfig): EmailProvider {
           subject: message.subject,
           html: message.html,
           text: message.text,
+          ...(message.reply_to ? { reply_to: message.reply_to } : {}),
         }),
       });
 

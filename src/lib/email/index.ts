@@ -19,6 +19,9 @@ export interface EmailMessage {
   text?: string;
   /** Sender address — falls back to provider default if omitted */
   from?: string;
+
+  /** Optional Reply-To address */
+  reply_to?: string;
 }
 
 export interface EmailProvider {

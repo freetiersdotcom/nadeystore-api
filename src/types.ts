@@ -14,6 +14,9 @@ export type Env = {
   REBUILD_HOOK_URL?: string;
   /** Seconds to wait after the first catalog edit before triggering the rebuild (default 60, minimum 10). */
   REBUILD_DEBOUNCE_SECONDS?: string;
+
+  TURNSTILE_SECRET?: string;      // wrangler secret put TURNSTILE_SECRET
+  CONTACT_NOTIFY_EMAIL?: string;  // optional: also email each message to this address
 };
 
 export type DOStub = {

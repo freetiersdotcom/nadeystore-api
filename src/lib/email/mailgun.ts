@@ -17,6 +17,7 @@ export function createMailgunProvider(config: EmailConfig): EmailProvider {
       form.append('subject', message.subject);
       form.append('html', message.html);
       if (message.text) form.append('text', message.text);
+      if (message.reply_to) form.append('h:Reply-To', message.reply_to);
 
       const credentials = btoa(`api:${config.api_key}`);
 

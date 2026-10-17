@@ -15,6 +15,7 @@ import { oauth } from './routes/oauth';
 import { ucp } from './routes/ucp';
 import { downloads } from './routes/downloads';
 import { assetRoutes } from './routes/assets';
+import { submissions } from './routes/submissions';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
 import { MerchantDO } from './do';
@@ -78,6 +79,8 @@ app.route('/v1/downloads', downloads);
 
 // Mount asset upload under the catalog products path
 app.route('/v1/catalog/products', assetRoutes);
+
+app.route('/v1/submissions', submissions);
 
 app.doc('/openapi.json', {
   openapi: '3.0.0',
