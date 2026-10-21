@@ -517,9 +517,13 @@ app.openapi(createTestOrder, async (c) => {
     const [variant] = await db.query<any>(`SELECT * FROM variants WHERE sku = ?`, [sku]);
     if (!variant) throw ApiError.notFound(`SKU not found: ${sku}`);
 
-    const [inv] = await db.query<any>(`SELECT * FROM inventory WHERE sku = ?`, [sku]);
-    const available = (inv?.on_hand ?? 0) - (inv?.reserved ?? 0);
-    if (available < qty) throw ApiError.insufficientInventory(sku);
+
+    // Digital and service variants have no stock; only physical items are checked.
+    if ((variant.product_type ?? 'physical') === 'physical') {
+      const [inv] = await db.query<any>(`SELECT * FROM inventory WHERE sku = ?`, [sku]);
+      const available = (inv?.on_hand ?? 0) - (inv?.reserved ?? 0);
+      if (available < qty) throw ApiError.insufficientInventory(sku);
+    }
 
     subtotal += variant.price_cents * qty;
     orderItems.push({
