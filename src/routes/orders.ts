@@ -7,6 +7,7 @@ import { ApiError, uuid, now, generateOrderNumber, type HonoEnv } from '../types
 import { validateDiscount, calculateDiscount, type Discount } from './discounts';
 import { dispatchWebhooks, type WebhookEventType } from '../lib/webhooks';
 import { recordPayment, paymentState } from '../lib/payments';
+import { cancelOrderAppointments } from '../lib/appointments';
 import {
   OrderIdParam,
   OrderStatus,
@@ -287,6 +288,11 @@ app.openapi(updateOrder, async (c) => {
   // received (deposit…) stays on the order: refund it from the refund panel.
   if (isOffline && status === 'canceled' && order.status !== 'canceled') {
     await releaseOfflineOrder(db, order);
+  }
+
+  // A canceled order frees its appointment slot.
+  if (status === 'canceled' && order.status !== 'canceled') {
+    await cancelOrderAppointments(db, orderId);
   }
 
   const [updated] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);

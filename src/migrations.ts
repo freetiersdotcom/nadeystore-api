@@ -109,7 +109,13 @@ ALTER TABLE orders ADD COLUMN pay_token TEXT;
 ALTER TABLE orders ADD COLUMN reminder_sent_at TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_pay_token ON orders(pay_token) WHERE pay_token IS NOT NULL;
 CREATE TABLE IF NOT EXISTS payment_intents (provider TEXT NOT NULL, ref TEXT NOT NULL, kind TEXT NOT NULL, cart_id TEXT, order_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (provider, ref));
-CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(order_id)
+CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(order_id);
+CREATE TABLE IF NOT EXISTS booking_services (product_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, tz TEXT, rules TEXT NOT NULL DEFAULT '[]', lead_hours INTEGER NOT NULL DEFAULT 24, horizon_days INTEGER NOT NULL DEFAULT 60, buffer_min INTEGER NOT NULL DEFAULT 0, step_min INTEGER NOT NULL DEFAULT 30, default_duration_min INTEGER NOT NULL DEFAULT 60, durations TEXT NOT NULL DEFAULT '{}', updated_at TEXT);
+CREATE TABLE IF NOT EXISTS booking_blocks (id TEXT PRIMARY KEY, product_id TEXT, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, resource_id TEXT NOT NULL DEFAULT 'default', product_id TEXT NOT NULL, sku TEXT NOT NULL, title TEXT NOT NULL, cart_id TEXT, order_id TEXT, status TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, customer_tz TEXT, hold_expires_at TEXT, reminder_sent_at TEXT, canceled_at TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_appointments_time ON appointments(starts_at, status);
+CREATE INDEX IF NOT EXISTS idx_appointments_cart ON appointments(cart_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_order ON appointments(order_id)
 `;
 
 // The download_tokens table and its indexes go into SCHEMA (already uses IF NOT EXISTS).

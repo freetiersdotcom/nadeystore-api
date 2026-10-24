@@ -8,6 +8,7 @@ import { createOrderFromCart, type OrderContext } from './orders';
 import { releaseOfflineOrder } from '../routes/orders';
 import { providerAvailable, type ChargeRequest, type PaymentProvider, type ProviderEnv } from './providers';
 import { minorFactor } from './currency';
+import { cancelOrderAppointments } from './appointments';
 
 // =============================================================================
 // Deposits and installments
@@ -282,6 +283,7 @@ export async function sweepPlans(db: Database, ctx: NoticeCtx) {
     if (s.auto_cancel && o.status === 'pending' && nowMs > dueMs + s.grace_days * DAY) {
       await releaseOfflineOrder(db as any, o);
       await db.run(`UPDATE orders SET status = 'canceled' WHERE id = ? AND status = 'pending'`, [o.id]);
+      await cancelOrderAppointments(db, o.id);
       await sendPlanEmail(db, { ...o, status: 'canceled' }, 'canceled', ctx);
       canceled++;
       continue;

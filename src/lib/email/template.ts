@@ -58,6 +58,8 @@ export interface OrderConfirmationData {
   /** Only present for physical/mixed orders */
   shipping_address?: TemplateShippingAddress | null;
   shipping_name?: string | null;
+  /** Booked appointment slots (services with online booking) */
+  appointments?: Array<{ title: string; starts_at: string; ends_at: string; tz: string; customer_tz?: string | null }>;
   /** Base URL for download page, e.g. https://yourstore.com */
   store_base_url: string;
   /** Optional: store contact address for the footer link (mailto). If absent, the store name is shown without a link. */
@@ -348,7 +350,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 ${hasDigital ? renderDownloadsBlock(data.items, data.store_base_url, loc) : ''}
 
                 <!-- Service (what happens next) -->
-                ${hasService ? renderServiceBlock(data.items, loc) : ''}
+                ${hasService ? renderServiceBlock(data.items, loc, data.appointments) : ''}
 
                 <!-- Shipping address (physical) -->
                 ${hasPhysical ? renderShippingBlock(data) : ''}
@@ -414,7 +416,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
     t('text.items'),
     itemLines,
     hasService ? '' : null,
-    hasService ? serviceText(data.items, loc) : null,
+    hasService ? serviceText(data.items, loc, data.appointments) : null,
     isCod ? '' : null,
     isCod ? codText(amountDue, loc) : null,
     planBlock ? '' : null,

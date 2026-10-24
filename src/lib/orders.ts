@@ -30,6 +30,7 @@ import { getEmailProvider } from './email/index';
 import { renderOrderConfirmation } from './email/template';
 import { dispatchWebhooks } from './webhooks';
 import { payUrl } from './email/planNotice';
+import { confirmBookings, getBookingConfig, DEFAULT_TZ } from './appointments';
 
 export interface OrderResult {
   orderId:      string;
@@ -93,7 +94,7 @@ export async function createOrderFromCart(
   // inactivity, and its reserved inventory was already released. The
   // payment is real and must still be recorded, but fulfillment needs a
   // human to confirm stock before shipping.
-  const needsReview = cart.status === 'expired';
+  let needsReview = cart.status === 'expired';
   const reviewReason = needsReview
     ? 'Payment confirmed after this checkout was auto-expired for inactivity; its inventory hold was already released — verify stock before fulfilling.'
     : null;
@@ -328,8 +329,29 @@ export async function createOrderFromCart(
 
   // ── Services: flag the order for manual scheduling ────────────────────────
   const hasService = itemsWithType.some(i => i.product_type === 'service');
+  let serviceStatus: 'to_schedule' | 'scheduled' | null = hasService ? 'to_schedule' : null;
+  let bookedAppts: Array<{ title: string; starts_at: string; ends_at: string; tz: string; customer_tz: string | null }> = [];
   if (hasService) {
     await db.run(`UPDATE orders SET service_status = 'to_schedule' WHERE id = ?`, [orderId]);
+    // Time slots chosen in the cart become bookings (any provider, any payment method).
+    const { booked, lost } = await confirmBookings(db, cartId, orderId);
+    for (const a of booked) {
+      const [pv] = await db.query<any>(`SELECT product_id FROM variants WHERE sku = ? LIMIT 1`, [a.sku]);
+      const cfg = pv ? await getBookingConfig(db, pv.product_id) : null;
+      bookedAppts.push({ title: a.title, starts_at: a.starts_at, ends_at: a.ends_at, tz: cfg?.tz ?? DEFAULT_TZ, customer_tz: a.customer_tz });
+    }
+    const serviceLines = itemsWithType.filter(i => i.product_type === 'service').length;
+    if (booked.length > 0 && lost.length === 0 && booked.length >= serviceLines) {
+      serviceStatus = 'scheduled';
+      await db.run(`UPDATE orders SET service_status = 'scheduled' WHERE id = ?`, [orderId]);
+    }
+    if (lost.length > 0) {
+      needsReview = true;
+      const why = 'Appointment slot no longer available after payment — agree on a new time with the customer.';
+      await db.run(
+        `UPDATE orders SET needs_review = 1, review_reason = CASE WHEN review_reason IS NULL OR review_reason = '' THEN ? ELSE review_reason || ' | ' || ? END WHERE id = ?`,
+        [why, why, orderId]);
+    }
   }
 
   // ── Mark cart as fully processed ──────────────────────────────────────────
@@ -381,6 +403,7 @@ export async function createOrderFromCart(
             }
           : null,
         shipping_name:    shippingName,
+        appointments:     bookedAppts.length > 0 ? bookedAppts : undefined,
         payment_method:   paymentMethod === 'deposit' ? 'deposit' : isCod ? 'cod' : 'online',
         plan:             paymentMethod === 'deposit' && ctx_order.deposit
           ? {
@@ -418,7 +441,7 @@ export async function createOrderFromCart(
       status:         orderStatus,
       payment_method: paymentMethod,
       needs_review:   needsReview,
-      service_status: hasService ? 'to_schedule' : null,
+      service_status: serviceStatus,
       customer_email: customerEmail,
       customer_id:    customerId,
       provider:       ctx_order.provider,

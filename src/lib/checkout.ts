@@ -23,6 +23,7 @@
 import type { Database } from '../db';
 import { ApiError, uuid, now } from '../types';
 import { validateDiscount, calculateDiscount, type Discount } from '../routes/discounts';
+import { assertBookingsReady } from './appointments';
 
 // Currencies natively supported by each provider.
 // If the cart currency is not in the provider's list, we either convert
@@ -125,6 +126,14 @@ export async function prepareCheckout(
   if (items.length === 0) {
     await db.run(`UPDATE carts SET status = 'open', updated_at = ? WHERE id = ?`, [now(), cartId]);
     throw ApiError.invalidRequest('Cart is empty');
+  }
+
+  // Bookable services need a held time slot before anything is charged.
+  try {
+    await assertBookingsReady(db, cartId, items);
+  } catch (e) {
+    await db.run(`UPDATE carts SET status = 'open', updated_at = ? WHERE id = ?`, [now(), cartId]);
+    throw e;
   }
 
   const subtotalCents = items.reduce(

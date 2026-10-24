@@ -9,6 +9,8 @@ import { cod } from './routes/cod';
 import { payments } from './routes/payments';
 import { depositRoutes, payLinks, planAdmin, planSettings } from './routes/plans';
 import { sweepPlans, storeBase } from './lib/plans';
+import { bookings } from './routes/bookings';
+import { sweepAppointments } from './lib/appointments';
 import { getDb } from './db';
 import { orders } from './routes/orders';
 import { customers } from './routes/customers';
@@ -76,6 +78,7 @@ app.route('/v1/carts', depositRoutes);
 app.route('/v1/pay', payLinks);
 app.route('/v1/orders', planAdmin);
 app.route('/v1/payment-plans', planSettings);
+app.route('/v1/bookings', bookings);
 app.route('/v1/customers', customers);
 app.route('/v1/webhooks', webhooks);
 app.route('/v1/webhooks', webhooksRoutes);
@@ -123,6 +126,14 @@ export default {
       console.log(`Cron: payment plans — ${swept.reminded} reminded, ${swept.canceled} canceled`);
     } catch (err) {
       console.error('Cron: payment plan sweep failed', err);
+    }
+    try {
+      const appts = await sweepAppointments(getDb(stub as unknown as DOStub), {
+        storeBaseUrl: storeBase(env as any), storeName: (env as any).STORE_NAME ?? 'Your Store',
+      });
+      console.log(`Cron: appointments — ${appts.reminded} reminded`);
+    } catch (err) {
+      console.error('Cron: appointment sweep failed', err);
     }
     const staleCheckouts = await typedStub.cleanupStaleCheckedOutCarts();
     console.log(`Cron: released ${staleCheckouts} stale checked-out carts`);
