@@ -26,9 +26,10 @@
   ],
 
   "vars": {
-	"STORE_NAME": "Nadey Store",
+	"STORE_NAME": "Santé Natur'",
 	"STORE_URL": "https://nadeystore.freetiers-com.workers.dev",
-	"IMAGES_URL": "nadeystore-api"
+	"IMAGES_URL": "nadeystore-api",
+	"COD_COUNTRIES": "BJ"
   },
 
   "triggers": {
