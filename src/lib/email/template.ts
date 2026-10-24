@@ -1,5 +1,6 @@
 import { et, type EmailTranslationKey } from './i18n';
 import { renderServiceBlock, serviceBadge, serviceText } from './serviceNotice';
+import { codTitle, renderCodBlock, codText } from './paymentNotice';
 
 // ============================================================
 // ORDER CONFIRMATION EMAIL TEMPLATE
@@ -60,6 +61,8 @@ export interface OrderConfirmationData {
   store_base_url: string;
   /** Optional: store contact address for the footer link (mailto). If absent, the store name is shown without a link. */
   store_contact_email?: string | null;
+  /** 'cod' = pay on delivery: the email says "order received" and shows the amount due. Default 'online'. */
+  payment_method?: 'online' | 'cod';
 }
 
 // ============================================================
@@ -280,6 +283,8 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
   const hasDigital = data.items.some(i => i.product_type === 'digital');
   const hasService = data.items.some(i => i.product_type === 'service');
   const cur = data.currency ?? DEFAULT_CURRENCY;
+  const isCod = data.payment_method === 'cod';
+  const amountDue = formatAmount(data.total_cents, cur, loc);
 
   const storeLink = data.store_contact_email
     ? `<a href="mailto:${esc(data.store_contact_email)}" style="color: #666;">${esc(data.store_name)}</a>`
@@ -314,7 +319,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 <tr>
                   <td style="padding: 0 0 32px 0;">
                     <h2 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; color: #111;">
-                      ${t('header.confirmed')}
+                      ${isCod ? codTitle(loc) : t('header.confirmed')}
                     </h2>
                     <p style="margin: 0; font-size: 15px; color: #666;">
                       ${t('header.hi')} ${esc(data.customer_email)}, ${t('header.thanks')}
@@ -324,6 +329,9 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                     </p>
                   </td>
                 </tr>
+
+                <!-- COD notice -->
+                ${isCod ? renderCodBlock(amountDue, loc) : ''}
 
                 <!-- Downloads (digital) -->
                 ${hasDigital ? renderDownloadsBlock(data.items, data.store_base_url, loc) : ''}
@@ -396,6 +404,8 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
     itemLines,
     hasService ? '' : null,
     hasService ? serviceText(data.items, loc) : null,
+    isCod ? '' : null,
+    isCod ? codText(amountDue, loc) : null,
     '',
     t('text.totals'),
     `${t('text.subtotal')} ${formatAmount(data.subtotal_cents, cur, loc)}`,

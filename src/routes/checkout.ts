@@ -152,7 +152,7 @@ const createCart = createRoute({
 
 app.openapi(createCart, async (c) => {
   //const { customer_email } = c.req.valid('json');
-  const { customer_email, currency } = c.req.valid('json');
+  const { customer_email, currency, locale } = c.req.valid('json');
 
   if (!isValidEmail(customer_email)) {
     throw ApiError.invalidRequest('A valid customer_email is required');
@@ -169,8 +169,8 @@ app.openapi(createCart, async (c) => {
   ]);*/
 
   await db.run(
-    `INSERT INTO carts (id, customer_email, currency, expires_at) VALUES (?, ?, ?, ?)`,
-    [id, customer_email, currency, expiresAt]
+    `INSERT INTO carts (id, customer_email, currency, locale, expires_at) VALUES (?, ?, ?, ?, ?)`,
+    [id, customer_email, currency, locale ?? null, expiresAt]
   );
 
   return c.json({

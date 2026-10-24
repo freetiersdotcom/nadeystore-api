@@ -44,6 +44,14 @@ export interface OrderContext {
   /** Base URL for download links in emails */
   storeBaseUrl: string;
   storeName:    string;
+  /**
+   * 'online' (default): payment already confirmed by the provider → order is 'paid'.
+   * 'cod': pay on delivery → order starts 'pending'; payments are recorded later.
+   * 'manual': entered by the merchant → 'pending' too, payments recorded by the caller.
+   */
+  paymentMethod?: 'online' | 'cod' | 'manual';
+  /** Do not send the confirmation email (counter sales, merchant-entered orders). */
+  skipEmail?: boolean;
 }
 
 // =============================================================================
@@ -113,6 +121,14 @@ export async function createOrderFromCart(
 
   const orderId     = uuid();
   const orderNumber = generateOrderNumber();
+  const paymentMethod = ctx_order.paymentMethod ?? 'online';
+  const isCod         = paymentMethod !== 'online';   // payment is collected later
+  const orderStatus   = isCod ? 'pending' : 'paid';
+  const amountPaid    = isCod ? 0 : totalCents;
+  const paidAt        = isCod ? null : now();
+  // Language chosen on the storefront (cart.locale). customers.locale defaults to 'en' and was
+  // never written, so it can't be trusted; French is the store's primary language.
+  const orderLocale   = cart.locale === 'en' ? 'en' : 'fr';
 
   // ── Upsert customer ───────────────────────────────────────────────────────
   let customerId: string | null = null;
@@ -140,10 +156,10 @@ export async function createOrderFromCart(
     );
   }
 
-  // After the customer upsert, fetch their locale:
-  const [customerLocale] = await db.query<{ locale: string }>(
-    `SELECT locale FROM customers WHERE id = ? LIMIT 1`, [customerId]
-  );
+  // Remember the customer's latest language.
+  if (customerId) {
+    await db.run(`UPDATE customers SET locale = ? WHERE id = ?`, [orderLocale, customerId]);
+  }
 
   // ── Save shipping address if present ─────────────────────────────────────
   if (shippingAddress && customerId) {
@@ -181,18 +197,26 @@ export async function createOrderFromCart(
         shipping_name, shipping_phone, ship_to,
         subtotal_cents, tax_cents, shipping_cents, total_cents, currency,
         discount_code, discount_id, discount_amount_cents,
-        cart_id, needs_review, review_reason)
-     VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cart_id, needs_review, review_reason, payment_method, amount_paid_cents, paid_at, locale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      orderId, customerId, orderNumber, customerEmail,
+      orderId, customerId, orderNumber, orderStatus, customerEmail,
       shippingName, null,
       shippingAddress ? JSON.stringify(shippingAddress) : null,
       subtotalCents,
       totalCents, currency,
       discountCode, discountId, discountAmountCents,
-      cartId, needsReview ? 1 : 0, reviewReason,
+      cartId, needsReview ? 1 : 0, reviewReason, paymentMethod, amountPaid, paidAt, orderLocale,
     ]
   );
+
+  // Online orders are paid in full by the provider: record it in the payments ledger.
+  if (!isCod) {
+    await db.run(
+      `INSERT INTO order_payments (id, order_id, amount_cents, method, reference) VALUES (?, ?, ?, 'online', ?)`,
+      [uuid(), orderId, totalCents, ctx_order.providerRef]
+    );
+  }
 
   // ── Discount usage tracking ───────────────────────────────────────────────
   if (discountId && discountAmountCents > 0) {
@@ -304,14 +328,14 @@ export async function createOrderFromCart(
   try {
     const emailProvider = await getEmailProvider(db);
 
-    if (emailProvider) {
+    if (emailProvider && !ctx_order.skipEmail) {
       const tokenBySku = new Map(downloadTokens.map(t => [t.sku, t.plain_token]));
 
       const { html, text } = renderOrderConfirmation({
         order_number:     orderNumber,
         customer_email:   customerEmail,
         store_name:       ctx_order.storeName,
-		locale: 		  customerLocale?.locale ?? 'fr-FR',
+        locale:           orderLocale,
         store_base_url:   `${ctx_order.storeBaseUrl}/`,
         items:            itemsWithType.map(item => ({
           sku:             item.sku,
@@ -342,11 +366,12 @@ export async function createOrderFromCart(
             }
           : null,
         shipping_name:    shippingName,
+        payment_method:   isCod ? 'cod' : 'online',
       });
 
       await emailProvider.send({
         to:      customerEmail,
-        subject: `Order confirmed — ${orderNumber}`,
+        subject: orderEmailSubject(orderNumber, orderLocale, isCod),
         html,
         text,
       });
@@ -367,7 +392,8 @@ export async function createOrderFromCart(
     order: {
       id:             orderId,
       number:         orderNumber,
-      status:         'paid',
+      status:         orderStatus,
+      payment_method: paymentMethod,
       needs_review:   needsReview,
       service_status: hasService ? 'to_schedule' : null,
       customer_email: customerEmail,
@@ -403,4 +429,10 @@ export async function createOrderFromCart(
   );
 
   return { orderId, orderNumber, needsReview };
+}
+
+function orderEmailSubject(orderNumber: string, locale: string | undefined, cod: boolean): string {
+  const en = (locale ?? 'fr').slice(0, 2).toLowerCase() === 'en';
+  if (cod) return en ? `Order received — ${orderNumber}` : `Commande reçue — ${orderNumber}`;
+  return en ? `Order confirmed — ${orderNumber}` : `Commande confirmée — ${orderNumber}`;
 }

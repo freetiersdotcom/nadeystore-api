@@ -6,6 +6,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, generateOrderNumber, type HonoEnv } from '../types';
 import { validateDiscount, calculateDiscount, type Discount } from './discounts';
 import { dispatchWebhooks, type WebhookEventType } from '../lib/webhooks';
+import { recordPayment, paymentState } from '../lib/payments';
 import {
   OrderIdParam,
   OrderStatus,
@@ -49,7 +50,7 @@ const listOrders = createRoute({
 
 app.openapi(listOrders, async (c) => {
   const db = getDb(c.var.db);
-  const { limit: limitStr, cursor, status, email, needs_review, service_status } = c.req.valid('query');
+  const { limit: limitStr, cursor, status, email, needs_review, service_status, balance_due } = c.req.valid('query');
   const limit = Math.min(parseInt(limitStr || '20'), 100);
 
   let query = `SELECT * FROM orders WHERE 1=1`;
@@ -73,6 +74,10 @@ app.openapi(listOrders, async (c) => {
   if (needs_review !== undefined) {
     query += ` AND needs_review = ?`;
     params.push(needs_review ? 1 : 0);
+  }
+
+  if (balance_due) {
+    query += ` AND amount_paid_cents < total_cents AND status NOT IN ('canceled', 'refunded')`;
   }
 
   if (cursor) {
@@ -196,6 +201,15 @@ app.openapi(updateOrder, async (c) => {
   const updates: string[] = [];
   const params: unknown[] = [];
 
+  // Orders whose payment is collected later (pay on delivery, entered by the merchant).
+  const isOffline = (order.payment_method ?? 'online') !== 'online';
+
+  // A canceled offline order has released its stock and discount; reopening it
+  // would silently oversell. The customer can simply place a new order.
+  if (isOffline && order.status === 'canceled' && status !== undefined && status !== 'canceled') {
+    throw ApiError.invalidRequest('A canceled order cannot be reopened.');
+  }
+
   if (status !== undefined) {
     updates.push('status = ?');
     params.push(status);
@@ -261,6 +275,20 @@ app.openapi(updateOrder, async (c) => {
   params.push(orderId);
   await db.run(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`, params);
 
+  // Choosing "Paid" by hand on an offline order = the whole balance was collected in cash.
+  if (isOffline && status === 'paid' && order.status !== 'canceled') {
+    const { balance_cents } = paymentState(order);
+    if (balance_cents > 0) {
+      await recordPayment(db, order, { amount_cents: balance_cents, method: 'cash', note: 'Marked as paid' });
+    }
+  }
+
+  // Canceling an offline order puts the goods back on the shelf. Money already
+  // received (deposit…) stays on the order: refund it from the refund panel.
+  if (isOffline && status === 'canceled' && order.status !== 'canceled') {
+    await releaseOfflineOrder(db, order);
+  }
+
   const [updated] = await db.query<any>(`SELECT * FROM orders WHERE id = ?`, [orderId]);
   const orderItems = await db.query<any>(`SELECT * FROM order_items WHERE order_id = ?`, [orderId]);
   const formattedOrder = formatOrder(updated, orderItems);
@@ -284,6 +312,52 @@ app.openapi(updateOrder, async (c) => {
 
   return c.json(formattedOrder, 200);
 });
+
+// Undo what createOrderFromCart() committed for an offline order that will
+// never be completed: stock, discount usage and the customer's lifetime counters.
+async function releaseOfflineOrder(db: ReturnType<typeof getDb>, order: any) {
+  const items = await db.query<{ sku: string; qty: number }>(
+    `SELECT oi.sku, oi.qty FROM order_items oi
+       JOIN variants v ON v.sku = oi.sku
+      WHERE oi.order_id = ? AND v.product_type = 'physical'`,
+    [order.id]
+  );
+  for (const it of items) {
+    await db.run(
+      `UPDATE inventory SET on_hand = on_hand + ?, updated_at = ? WHERE sku = ?`,
+      [it.qty, now(), it.sku]
+    );
+    await db.run(
+      `INSERT INTO inventory_logs (id, sku, delta, reason) VALUES (?, ?, ?, 'return')`,
+      [uuid(), it.sku, it.qty]
+    );
+  }
+
+  if (order.discount_id) {
+    const removed = await db.query<{ id: string }>(
+      `SELECT id FROM discount_usage WHERE order_id = ? AND discount_id = ?`,
+      [order.id, order.discount_id]
+    );
+    if (removed.length > 0) {
+      await db.run(`DELETE FROM discount_usage WHERE order_id = ? AND discount_id = ?`, [order.id, order.discount_id]);
+      await db.run(
+        `UPDATE discounts SET usage_count = MAX(usage_count - 1, 0), updated_at = ? WHERE id = ?`,
+        [now(), order.discount_id]
+      );
+    }
+  }
+
+  if (order.customer_id) {
+    await db.run(
+      `UPDATE customers SET
+         order_count = MAX(order_count - 1, 0),
+         total_spent_cents = MAX(total_spent_cents - ?, 0),
+         updated_at = ?
+       WHERE id = ?`,
+      [order.total_cents, now(), order.customer_id]
+    );
+  }
+}
 
 const refundOrder = createRoute({
   method: 'post',
@@ -352,7 +426,8 @@ app.openapi(refundOrder, async (c) => {
   }
 });
 
-const REFUNDABLE_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+// 'pending' and 'canceled' qualify too: a deposit may have been paid before the order was canceled.
+const REFUNDABLE_STATUSES = ['pending', 'paid', 'processing', 'shipped', 'delivered', 'canceled'];
 
 async function refundTotals(db: ReturnType<typeof getDb>, orderId: string, totalCents: number) {
   const [row] = await db.query<{ refunded: number }>(
@@ -443,7 +518,10 @@ app.openapi(recordManualRefund, async (c) => {
     throw ApiError.invalidRequest(`Cannot record a refund for an order with status "${order.status}"`);
   }
 
-  const { refunded, remaining } = await refundTotals(db, orderId, order.total_cents);
+  // Only what was actually paid can be refunded.
+  const paidCents = Number(order.amount_paid_cents ?? order.total_cents);
+  if (paidCents <= 0) throw ApiError.invalidRequest('Nothing has been paid on this order, so there is nothing to refund.');
+  const { refunded, remaining } = await refundTotals(db, orderId, paidCents);
   if (remaining <= 0) throw ApiError.conflict('Order already fully refunded');
 
   const amount = amount_cents ?? remaining;
@@ -459,7 +537,7 @@ app.openapi(recordManualRefund, async (c) => {
   );
 
   const newRefunded = refunded + amount;
-  const fullyRefunded = newRefunded >= order.total_cents;
+  const fullyRefunded = newRefunded >= paidCents;
   let orderStatus: string = order.status;
 
   if (fullyRefunded) {
@@ -482,7 +560,7 @@ app.openapi(recordManualRefund, async (c) => {
       refund: formatRefund(row),
       order_status: orderStatus as z.infer<typeof OrderStatus>,
       refunded_cents: newRefunded,
-      remaining_cents: Math.max(order.total_cents - newRefunded, 0),
+      remaining_cents: Math.max(paidCents - newRefunded, 0),
     },
     200
   );
@@ -674,6 +752,9 @@ function formatOrder(order: any, items: any[], variantTypes?: Map<string, Produc
     id: order.id,
     number: order.number,
     status: order.status,
+    payment_method: (order.payment_method === 'cod' || order.payment_method === 'manual' ? order.payment_method : 'online') as 'online' | 'cod' | 'manual',
+    ...paymentState(order),
+    paid_at: (order.paid_at ?? null) as string | null,
     needs_review: !!order.needs_review,
     review_reason: order.review_reason ?? null,
     service_status: order.service_status ?? null,
@@ -834,7 +915,7 @@ app.openapi(reissueDownload, async (c) => {
   const { orderId, sku } = c.req.valid('param');
   const db = getDb(c.var.db);
 
-  const [order] = await db.query<any>(`SELECT id FROM orders WHERE id = ?`, [orderId]);
+  const [order] = await db.query<any>(`SELECT id, locale FROM orders WHERE id = ?`, [orderId]);
   if (!order) throw ApiError.notFound('Order not found');
 
   const [item] = await db.query<any>(
@@ -861,8 +942,10 @@ app.openapi(reissueDownload, async (c) => {
   );
 
   // Build the download URL — read STORE_URL from env if available
-  const storeBaseUrl = (c.env as any).STORE_URL ?? 'http://localhost:8787';
-  const downloadUrl = `${storeBaseUrl}/fr/telechargements/?token=${plainToken}`;
+  // Same language as the order's emails (orders.locale; older orders fall back to French).
+  const storeBaseUrl = String((c.env as any).STORE_URL ?? 'http://localhost:8787').replace(/\/$/, '');
+  const dlPath = order.locale === 'en' ? '/en/downloads/' : '/fr/telechargements/';
+  const downloadUrl = `${storeBaseUrl}${dlPath}?token=${plainToken}`;
 
   return c.json({ token: plainToken, download_url: downloadUrl, expires_at: expiresAt }, 200);
 });

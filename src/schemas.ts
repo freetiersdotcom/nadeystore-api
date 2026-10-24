@@ -261,6 +261,7 @@ export const CartResponse = z.object({
 export const CreateCartBody = z.object({
   customer_email: z.string().email().openapi({ example: 'customer@example.com' }),
   currency: z.string().length(3).toUpperCase().default('XOF').openapi({ example: 'XOF' }),
+  locale: z.enum(['fr', 'en']).optional().openapi({ description: 'Storefront language; used for emails.' }),
 }).openapi('CreateCart');
 
 export const AddCartItemsBody = z.object({
@@ -328,6 +329,11 @@ export const OrderResponse = z.object({
   id: z.string().uuid(),
   number: z.string().openapi({ example: 'ORD-241231-A7K2' }),
   status: OrderStatus,
+  payment_method: z.enum(['online', 'cod', 'manual']).optional().openapi({ description: "'online' = paid through the provider; 'cod' = pay on delivery; 'manual' = entered by the merchant." }),
+  payment_status: z.enum(['unpaid', 'partial', 'paid']).optional(),
+  paid_cents: z.number().int().optional(),
+  balance_cents: z.number().int().optional(),
+  paid_at: z.string().nullable().optional(),
   needs_review: z.boolean().optional(),
   review_reason: z.string().nullable().optional(),
   service_status: ServiceStatus.nullable().optional(),
@@ -374,6 +380,7 @@ export const OrderQuery = PaginationQuery.extend({
   email: z.string().email().optional().openapi({ param: { name: 'email', in: 'query' } }),
   needs_review: z.coerce.boolean().optional().openapi({ param: { name: 'needs_review', in: 'query' } }),
   service_status: ServiceStatus.optional().openapi({ param: { name: 'service_status', in: 'query' } }),
+  balance_due: z.coerce.boolean().optional().openapi({ param: { name: 'balance_due', in: 'query' } }),
 });
 
 export const UpdateOrderBody = z.object({
