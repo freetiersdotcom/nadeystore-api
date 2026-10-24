@@ -315,7 +315,7 @@ app.openapi(updateOrder, async (c) => {
 
 // Undo what createOrderFromCart() committed for an offline order that will
 // never be completed: stock, discount usage and the customer's lifetime counters.
-async function releaseOfflineOrder(db: ReturnType<typeof getDb>, order: any) {
+export async function releaseOfflineOrder(db: ReturnType<typeof getDb>, order: any) {
   const items = await db.query<{ sku: string; qty: number }>(
     `SELECT oi.sku, oi.qty FROM order_items oi
        JOIN variants v ON v.sku = oi.sku
@@ -752,9 +752,10 @@ function formatOrder(order: any, items: any[], variantTypes?: Map<string, Produc
     id: order.id,
     number: order.number,
     status: order.status,
-    payment_method: (order.payment_method === 'cod' || order.payment_method === 'manual' ? order.payment_method : 'online') as 'online' | 'cod' | 'manual',
+    payment_method: (['cod', 'manual', 'deposit'].includes(order.payment_method) ? order.payment_method : 'online') as 'online' | 'cod' | 'manual' | 'deposit',
     ...paymentState(order),
     paid_at: (order.paid_at ?? null) as string | null,
+    due_at: (order.due_at ?? null) as string | null,
     needs_review: !!order.needs_review,
     review_reason: order.review_reason ?? null,
     service_status: order.service_status ?? null,

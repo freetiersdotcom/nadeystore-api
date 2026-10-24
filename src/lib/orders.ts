@@ -29,6 +29,7 @@ import { createDownloadTokens } from './downloads';
 import { getEmailProvider } from './email/index';
 import { renderOrderConfirmation } from './email/template';
 import { dispatchWebhooks } from './webhooks';
+import { payUrl } from './email/planNotice';
 
 export interface OrderResult {
   orderId:      string;
@@ -49,9 +50,11 @@ export interface OrderContext {
    * 'cod': pay on delivery → order starts 'pending'; payments are recorded later.
    * 'manual': entered by the merchant → 'pending' too, payments recorded by the caller.
    */
-  paymentMethod?: 'online' | 'cod' | 'manual';
+  paymentMethod?: 'online' | 'cod' | 'manual' | 'deposit';
   /** Do not send the confirmation email (counter sales, merchant-entered orders). */
   skipEmail?: boolean;
+  /** Deposit checkout: the amount the provider just confirmed, the date the balance is expected, and the pay-link token. */
+  deposit?: { amount_cents: number; due_at: string | null; pay_token: string };
 }
 
 // =============================================================================
@@ -124,7 +127,7 @@ export async function createOrderFromCart(
   const paymentMethod = ctx_order.paymentMethod ?? 'online';
   const isCod         = paymentMethod !== 'online';   // payment is collected later
   const orderStatus   = isCod ? 'pending' : 'paid';
-  const amountPaid    = isCod ? 0 : totalCents;
+  const amountPaid    = isCod ? (ctx_order.deposit?.amount_cents ?? 0) : totalCents;
   const paidAt        = isCod ? null : now();
   // Language chosen on the storefront (cart.locale). customers.locale defaults to 'en' and was
   // never written, so it can't be trusted; French is the store's primary language.
@@ -215,6 +218,18 @@ export async function createOrderFromCart(
     await db.run(
       `INSERT INTO order_payments (id, order_id, amount_cents, method, reference) VALUES (?, ?, ?, 'online', ?)`,
       [uuid(), orderId, totalCents, ctx_order.providerRef]
+    );
+  }
+
+  // Deposit orders: the provider confirmed the deposit; record it and set the balance deadline.
+  if (paymentMethod === 'deposit' && ctx_order.deposit) {
+    await db.run(
+      `INSERT INTO order_payments (id, order_id, amount_cents, method, reference, note) VALUES (?, ?, ?, 'online', ?, 'Deposit')`,
+      [uuid(), orderId, ctx_order.deposit.amount_cents, ctx_order.providerRef]
+    );
+    await db.run(
+      `UPDATE orders SET due_at = ?, pay_token = ? WHERE id = ?`,
+      [ctx_order.deposit.due_at, ctx_order.deposit.pay_token, orderId]
     );
   }
 
@@ -366,7 +381,15 @@ export async function createOrderFromCart(
             }
           : null,
         shipping_name:    shippingName,
-        payment_method:   isCod ? 'cod' : 'online',
+        payment_method:   paymentMethod === 'deposit' ? 'deposit' : isCod ? 'cod' : 'online',
+        plan:             paymentMethod === 'deposit' && ctx_order.deposit
+          ? {
+              paid_cents:    ctx_order.deposit.amount_cents,
+              balance_cents: totalCents - ctx_order.deposit.amount_cents,
+              due_at:        ctx_order.deposit.due_at,
+              pay_url:       payUrl(ctx_order.storeBaseUrl, orderLocale, ctx_order.deposit.pay_token),
+            }
+          : undefined,
       });
 
       await emailProvider.send({

@@ -1,6 +1,7 @@
 import { et, type EmailTranslationKey } from './i18n';
 import { renderServiceBlock, serviceBadge, serviceText } from './serviceNotice';
 import { codTitle, renderCodBlock, codText } from './paymentNotice';
+import { depositTitle, renderDepositBlock, depositText, fmtDate } from './planNotice';
 
 // ============================================================
 // ORDER CONFIRMATION EMAIL TEMPLATE
@@ -62,7 +63,9 @@ export interface OrderConfirmationData {
   /** Optional: store contact address for the footer link (mailto). If absent, the store name is shown without a link. */
   store_contact_email?: string | null;
   /** 'cod' = pay on delivery: the email says "order received" and shows the amount due. Default 'online'. */
-  payment_method?: 'online' | 'cod';
+  payment_method?: 'online' | 'cod' | 'deposit';
+  /** Deposit orders: what was paid, what remains, when, and where to pay it. */
+  plan?: { paid_cents: number; balance_cents: number; due_at: string | null; pay_url: string | null };
 }
 
 // ============================================================
@@ -284,6 +287,13 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
   const hasService = data.items.some(i => i.product_type === 'service');
   const cur = data.currency ?? DEFAULT_CURRENCY;
   const isCod = data.payment_method === 'cod';
+  const isDeposit = data.payment_method === 'deposit' && !!data.plan;
+  const planBlock = isDeposit ? {
+    paid: formatAmount(data.plan!.paid_cents, cur, loc),
+    balance: formatAmount(data.plan!.balance_cents, cur, loc),
+    due: fmtDate(data.plan!.due_at, loc),
+    pay_url: data.plan!.pay_url,
+  } : null;
   const amountDue = formatAmount(data.total_cents, cur, loc);
 
   const storeLink = data.store_contact_email
@@ -319,7 +329,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
                 <tr>
                   <td style="padding: 0 0 32px 0;">
                     <h2 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; color: #111;">
-                      ${isCod ? codTitle(loc) : t('header.confirmed')}
+                      ${isCod ? codTitle(loc) : isDeposit ? depositTitle(loc) : t('header.confirmed')}
                     </h2>
                     <p style="margin: 0; font-size: 15px; color: #666;">
                       ${t('header.hi')} ${esc(data.customer_email)}, ${t('header.thanks')}
@@ -332,6 +342,7 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
 
                 <!-- COD notice -->
                 ${isCod ? renderCodBlock(amountDue, loc) : ''}
+                ${planBlock ? renderDepositBlock(planBlock, loc) : ''}
 
                 <!-- Downloads (digital) -->
                 ${hasDigital ? renderDownloadsBlock(data.items, data.store_base_url, loc) : ''}
@@ -406,6 +417,8 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
     hasService ? serviceText(data.items, loc) : null,
     isCod ? '' : null,
     isCod ? codText(amountDue, loc) : null,
+    planBlock ? '' : null,
+    planBlock ? depositText(planBlock, loc) : null,
     '',
     t('text.totals'),
     `${t('text.subtotal')} ${formatAmount(data.subtotal_cents, cur, loc)}`,

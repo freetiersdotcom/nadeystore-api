@@ -101,7 +101,15 @@ ALTER TABLE refunds ADD COLUMN source TEXT NOT NULL DEFAULT 'stripe';
 ALTER TABLE refunds ADD COLUMN method TEXT;
 ALTER TABLE refunds ADD COLUMN reference TEXT;
 ALTER TABLE refunds ADD COLUMN note TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
+ALTER TABLE products ADD COLUMN deposit_type TEXT;
+ALTER TABLE products ADD COLUMN deposit_value INTEGER;
+ALTER TABLE orders ADD COLUMN due_at TEXT;
+ALTER TABLE orders ADD COLUMN pay_token TEXT;
+ALTER TABLE orders ADD COLUMN reminder_sent_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_pay_token ON orders(pay_token) WHERE pay_token IS NOT NULL;
+CREATE TABLE IF NOT EXISTS payment_intents (provider TEXT NOT NULL, ref TEXT NOT NULL, kind TEXT NOT NULL, cart_id TEXT, order_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (provider, ref));
+CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(order_id)
 `;
 
 // The download_tokens table and its indexes go into SCHEMA (already uses IF NOT EXISTS).

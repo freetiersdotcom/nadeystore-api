@@ -7,6 +7,7 @@ import { handleUCPStripeWebhook } from './ucp';
 
 import { createOrderFromCart } from '../lib/orders';
 import { verifyFedaPaySignature, verifyFedaPayTransaction } from '../lib/fedapay';
+import { settleCharge } from '../lib/plans';
 
 // ============================================================
 // WEBHOOK ROUTES
@@ -94,7 +95,7 @@ webhooks.post('/stripe', async (c) => {
       const storeBaseUrl = (c.env as any).STORE_URL
         ?? (c.env.IMAGES_URL ? new URL(c.env.IMAGES_URL).origin : 'https://yourstore.com');
 
-      await createOrderFromCart(db, c.var.db, c.executionCtx, cartId, {
+      await settleCharge(db, c.var.db, c.executionCtx, cartId, 'stripe', session.id, {
         provider:     'stripe',
         providerRef:  session.id,
         storeBaseUrl,
@@ -205,7 +206,8 @@ webhooks.post('/fedapay', async (c) => {
 
     if (!cartId && txId) {
       const [row] = await db.query<{ cart_id: string }>(
-        `SELECT cart_id FROM fedapay_transactions WHERE transaction_id = ?`, [txId]
+        `SELECT cart_id FROM fedapay_transactions WHERE transaction_id = ?
+         UNION SELECT cart_id FROM payment_intents WHERE provider = 'fedapay' AND ref = ?`, [txId, String(txId)]
       );
       cartId = row?.cart_id ?? null;
     }
@@ -229,7 +231,7 @@ webhooks.post('/fedapay', async (c) => {
             console.warn(`[fedapay] API verify failed for tx ${txId} (proceeding):`, err);
           }
 
-          await createOrderFromCart(getDb(dbBinding), dbBinding, c.executionCtx, cartId!, {
+          await settleCharge(getDb(dbBinding), dbBinding, c.executionCtx, cartId!, 'fedapay', String(txId), {
             provider:    'fedapay',
             providerRef: String(txId),
             storeBaseUrl,

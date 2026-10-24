@@ -27,7 +27,7 @@ import { validateDiscount, calculateDiscount, type Discount } from '../routes/di
 // Currencies natively supported by each provider.
 // If the cart currency is not in the provider's list, we either convert
 // (future) or return an error (current safe default).
-const PROVIDER_CURRENCIES: Record<string, string[]> = {
+export const PROVIDER_CURRENCIES: Record<string, string[]> = {
   stripe:    ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF', 'SEK', 'NOK', 'DKK'],
   fedapay:   ['XOF', 'GNF'],
   paystack:  ['NGN', 'USD', 'GBP', 'ZAR', 'GHS', 'KES'],

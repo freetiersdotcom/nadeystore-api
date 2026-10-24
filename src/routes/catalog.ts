@@ -134,6 +134,8 @@ app.openapi(listProducts, async (c) => {
     description_en: p.description_en,
     tags: p.tags ? JSON.parse(p.tags) : null,
     video_url: p.video_url ?? null,
+    deposit_type: p.deposit_type ?? null,
+    deposit_value: p.deposit_value ?? null,
     status: p.status,
     created_at: p.created_at,
     variants: (variantsByProduct[p.id] || []).map((v) => ({
@@ -193,6 +195,8 @@ app.openapi(getProduct, async (c) => {
     description_en: product.description_en,
     tags: product.tags ? JSON.parse(product.tags) : null,
     video_url: product.video_url ?? null,
+    deposit_type: product.deposit_type ?? null,
+    deposit_value: product.deposit_value ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
@@ -304,6 +308,14 @@ app.openapi(updateProduct, async (c) => {
     updates.push('tags = ?');
     params.push(body.tags ? JSON.stringify(body.tags) : null);
   }
+  if (body.deposit_type !== undefined || body.deposit_value !== undefined) {
+    const dType = body.deposit_type !== undefined ? body.deposit_type : existing.deposit_type;
+    const dValue = body.deposit_type === null ? null : body.deposit_value !== undefined ? body.deposit_value : existing.deposit_value;
+    if (dType && !dValue) throw ApiError.invalidRequest('deposit_value is required with deposit_type.');
+    if (dType === 'percent' && Number(dValue) > 99) throw ApiError.invalidRequest('A percentage deposit must be between 1 and 99.');
+    updates.push('deposit_type = ?', 'deposit_value = ?');
+    params.push(dType ?? null, dType ? dValue : null);
+  }
   if (body.video_url !== undefined) {
     updates.push('video_url = ?');
     params.push(body.video_url || null);
@@ -340,6 +352,8 @@ app.openapi(updateProduct, async (c) => {
     description_en: product.description_en,
     tags: product.tags ? JSON.parse(product.tags) : null,
     video_url: product.video_url ?? null,
+    deposit_type: product.deposit_type ?? null,
+    deposit_value: product.deposit_value ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
