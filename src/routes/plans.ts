@@ -58,6 +58,7 @@ depositRoutes.openapi(createRoute({
 });
 
 const PreviewBody = z.object({
+  currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
   items: z.array(z.object({ sku: z.string().min(1), qty: z.number().int().positive().max(999) })).min(1).max(50),
 }).openapi('DepositPreviewBody');
 
@@ -68,14 +69,14 @@ depositRoutes.openapi(createRoute({
   request: { body: { content: { 'application/json': { schema: PreviewBody } } } },
   responses: { 200: j('Quote', Quote), 400: err('Unknown SKU') },
 }), async (c) => {
-  const { items } = c.req.valid('json');
+  const { items, currency: wanted } = c.req.valid('json');
   const db = getDb(c.var.db);
   const lines: Array<{ sku: string; qty: number; unit_price_cents: number }> = [];
-  let currency = 'XOF';
+  let currency = wanted ? wanted.toUpperCase() : 'XOF';
   for (const it of items) {
     const [v] = await db.query<{ price_cents: number; currency: string | null }>(`SELECT price_cents, currency FROM variants WHERE sku = ? LIMIT 1`, [it.sku]);
     if (!v) throw ApiError.invalidRequest(`Unknown SKU: ${it.sku}`);
-    if (v.currency) currency = v.currency;
+    if (!wanted && v.currency) currency = v.currency;
     lines.push({ sku: it.sku, qty: it.qty, unit_price_cents: Number(v.price_cents) });
   }
   const subtotal = lines.reduce((s, l) => s + l.unit_price_cents * l.qty, 0);
