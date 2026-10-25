@@ -136,6 +136,7 @@ app.openapi(listProducts, async (c) => {
     video_url: p.video_url ?? null,
     deposit_type: p.deposit_type ?? null,
     deposit_value: p.deposit_value ?? null,
+    deposit_due_days: p.deposit_due_days ?? null,
     status: p.status,
     created_at: p.created_at,
     variants: (variantsByProduct[p.id] || []).map((v) => ({
@@ -197,6 +198,7 @@ app.openapi(getProduct, async (c) => {
     video_url: product.video_url ?? null,
     deposit_type: product.deposit_type ?? null,
     deposit_value: product.deposit_value ?? null,
+    deposit_due_days: product.deposit_due_days ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({
@@ -316,6 +318,10 @@ app.openapi(updateProduct, async (c) => {
     updates.push('deposit_type = ?', 'deposit_value = ?');
     params.push(dType ?? null, dType ? dValue : null);
   }
+  if (body.deposit_due_days !== undefined || body.deposit_type === null) {
+    updates.push('deposit_due_days = ?');
+    params.push(body.deposit_type === null ? null : body.deposit_due_days ?? null);
+  }
   if (body.video_url !== undefined) {
     updates.push('video_url = ?');
     params.push(body.video_url || null);
@@ -354,6 +360,7 @@ app.openapi(updateProduct, async (c) => {
     video_url: product.video_url ?? null,
     deposit_type: product.deposit_type ?? null,
     deposit_value: product.deposit_value ?? null,
+    deposit_due_days: product.deposit_due_days ?? null,
     status: product.status,
     created_at: product.created_at,
     variants: variants.map((v) => ({

@@ -135,6 +135,7 @@ export const ProductResponse = z.object({
   video_url: z.string().nullable(),
   deposit_type: z.enum(['percent', 'fixed']).nullable().optional().openapi({ description: 'Deposit asked at checkout: a percentage (1-99) or a fixed amount per unit.' }),
   deposit_value: z.number().int().nullable().optional(),
+  deposit_due_days: z.number().int().nullable().optional().openapi({ description: 'Days the customer has to pay the balance of this product. Null = the store default.' }),
   status: ProductStatus,
   created_at: z.string().datetime(),
   variants: z.array(VariantResponse),
@@ -166,6 +167,7 @@ export const UpdateProductBody = z.object({
   video_url: VideoUrl.nullable().optional(),
   deposit_type: z.enum(['percent', 'fixed']).nullable().optional(),
   deposit_value: z.number().int().positive().nullable().optional(),
+  deposit_due_days: z.number().int().min(1).max(365).nullable().optional(),
   status: ProductStatus.optional(),
 }).openapi('UpdateProduct');
 

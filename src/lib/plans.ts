@@ -112,9 +112,12 @@ export async function computeDeposit(
 
   let raw = 0;
   let hasDepositProduct = false;
+  let dueDays = Infinity;   // shortest balance period among the deposit products in the cart
+  const ownDays = (r: { deposit_due_days: number | null } | undefined) =>
+    Number(r?.deposit_due_days) > 0 ? Number(r!.deposit_due_days) : settings.due_days;
   for (const it of items) {
-    const [row] = await db.query<{ deposit_type: string | null; deposit_value: number | null; product_type: string }>(
-      `SELECT p.deposit_type, p.deposit_value, v.product_type
+    const [row] = await db.query<{ deposit_type: string | null; deposit_value: number | null; deposit_due_days: number | null; product_type: string }>(
+      `SELECT p.deposit_type, p.deposit_value, p.deposit_due_days, v.product_type
          FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku = ? LIMIT 1`,
       [it.sku]
     );
@@ -123,9 +126,11 @@ export async function computeDeposit(
     const value = Number(row?.deposit_value ?? 0);
     if (row?.deposit_type === 'percent' && value > 0) {
       hasDepositProduct = true;
+      dueDays = Math.min(dueDays, ownDays(row));
       raw += Math.ceil((line * value) / 100);
     } else if (row?.deposit_type === 'fixed' && value > 0) {
       hasDepositProduct = true;
+      dueDays = Math.min(dueDays, ownDays(row));
       raw += Math.min(value * it.qty, line);
     } else {
       raw += line;           // products without a deposit setting are paid in full up front
@@ -137,7 +142,17 @@ export async function computeDeposit(
   const scaled = subtotalCents > 0 ? Math.ceil((raw * totalCents) / subtotalCents) : raw;
   const deposit = Math.max(1, Math.min(scaled, totalCents));
   if (deposit >= totalCents) return { ...base, eligible: false, reason: 'not_less_than_total' };
-  return { ...base, eligible: true, deposit_cents: deposit, balance_cents: totalCents - deposit };
+  return { ...base, due_days: Number.isFinite(dueDays) ? dueDays : settings.due_days, eligible: true, deposit_cents: deposit, balance_cents: totalCents - deposit };
+}
+
+/** Days to pay the balance of an order created from this cart: the shortest period set on its deposit products (store default when a product has none). */
+export async function dueDaysForCart(db: Database, cartId: string, fallback: number): Promise<number> {
+  const rows = await db.query<{ deposit_due_days: number | null }>(
+    `SELECT p.deposit_due_days FROM cart_items ci
+       JOIN variants v ON v.sku = ci.sku JOIN products p ON p.id = v.product_id
+      WHERE ci.cart_id = ? AND p.deposit_type IS NOT NULL`, [cartId]);
+  const days = rows.map((r) => (Number(r.deposit_due_days) > 0 ? Number(r.deposit_due_days) : fallback));
+  return days.length > 0 ? Math.min(...days) : fallback;
 }
 
 // ── Emails ───────────────────────────────────────────────────────────────────
@@ -253,7 +268,7 @@ export async function settleCharge(
     return createOrderFromCart(db, stub, ctx, cartId, {
       ...orderCtx,
       paymentMethod: 'deposit',
-      deposit: { amount_cents: intent.amount_cents, due_at: addDays(new Date(), settings.due_days), pay_token: newPayToken() },
+      deposit: { amount_cents: intent.amount_cents, due_at: addDays(new Date(), await dueDaysForCart(db, cartId, settings.due_days)), pay_token: newPayToken() },
     });
   }
 

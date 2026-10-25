@@ -104,6 +104,7 @@ ALTER TABLE refunds ADD COLUMN note TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
 ALTER TABLE products ADD COLUMN deposit_type TEXT;
 ALTER TABLE products ADD COLUMN deposit_value INTEGER;
+ALTER TABLE products ADD COLUMN deposit_due_days INTEGER;
 ALTER TABLE orders ADD COLUMN due_at TEXT;
 ALTER TABLE orders ADD COLUMN pay_token TEXT;
 ALTER TABLE orders ADD COLUMN reminder_sent_at TEXT;
