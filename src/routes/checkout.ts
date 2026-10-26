@@ -19,6 +19,7 @@ import {
 } from '../schemas';
 
 import { prepareCheckout, setCartShipping, SUPPORTED_CURRENCIES } from '../lib/checkout';
+import { resolveContact, normalizePhone } from '../lib/geo';
 import { createFedaPayCheckout } from '../lib/fedapay';
 
 async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
@@ -565,7 +566,8 @@ const SetShippingBody = z.object({
   line2:       z.string().optional().nullable(),
   city:        z.string().min(1),
   state:       z.string().optional().nullable(),
-  postal_code: z.string().min(1),
+  postal_code: z.string().max(20).optional().default('').openapi({ description: 'Required only for countries that use postal codes (FR, BE, GB, CA…).' }),
+  phone:       z.string().max(40).optional().nullable().openapi({ example: '+22901610000000', description: 'International format. Required: the courier calls it.' }),
   country:     z.string().length(2).openapi({ example: 'BJ', description: 'ISO 3166-1 alpha-2' }),
 }).openapi('SetShipping');
 
@@ -600,8 +602,46 @@ app.openapi(setShippingRoute, async (c) => {
   if (!cart) throw ApiError.notFound('Cart not found');
   if (cart.status !== 'open') throw ApiError.invalidRequest('Cart is not open');
 
-  await setCartShipping(db, cartId, body);
+  const contact = resolveContact(body, { phoneRequired: true });
+  await setCartShipping(db, cartId, { ...body, ...contact });
 
+  return c.json({ ok: true as const }, 200);
+});
+
+const SetContactBody = z.object({
+  phone: z.string().min(1).max(40).openapi({ example: '+22901610000000', description: 'International format.' }),
+}).openapi('SetContact');
+
+const setContactRoute = createRoute({
+  method:  'patch',
+  path:    '/{cartId}/contact',
+  tags:    ['Checkout'],
+  summary: 'Set a contact phone on cart',
+  description: 'For carts with no delivery address (services only): keeps a phone number for the appointment or follow-up. Stored as E.164 and copied to the order and the customer.',
+  request: {
+    params: CartIdParam,
+    body:   { content: { 'application/json': { schema: SetContactBody } } },
+  },
+  responses: {
+    200: { content: { 'application/json': { schema: z.object({ ok: z.literal(true) }) } }, description: 'Phone saved' },
+    400: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Invalid phone or cart not open' },
+    404: { content: { 'application/json': { schema: ErrorResponse } }, description: 'Cart not found' },
+  },
+});
+
+app.openapi(setContactRoute, async (c) => {
+  const { cartId } = c.req.valid('param');
+  const { phone }  = c.req.valid('json');
+  const db         = getDb(c.var.db);
+
+  const [cart] = await db.query<{ status: string }>(`SELECT status FROM carts WHERE id = ? LIMIT 1`, [cartId]);
+  if (!cart) throw ApiError.notFound('Cart not found');
+  if (cart.status !== 'open') throw ApiError.invalidRequest('Cart is not open');
+
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw ApiError.invalidRequest('Enter a valid phone number, with its country code (e.g. +229 01 61 00 00 00).');
+
+  await db.run(`UPDATE carts SET contact_phone = ?, updated_at = ? WHERE id = ? AND status = 'open'`, [normalized, now(), cartId]);
   return c.json({ ok: true as const }, 200);
 });
 

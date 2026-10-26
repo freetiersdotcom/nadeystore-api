@@ -21,8 +21,8 @@ import { CartIdParam, ErrorResponse } from '../schemas';
 //     (env var, comma-separated ISO codes, default "BJ"; set it empty to
 //     disable COD entirely). Digital-only carts are refused (nothing could be
 //     delivered "against payment"); services are allowed.
-//   - a phone number is required (stored in the address' postal_code field,
-//     which the cart form already labels "Téléphone / Code postal").
+//   - a phone number is required (address.phone; carts from an older storefront page
+//     kept it in postal_code).
 // =============================================================================
 
 const CodCheckoutBody = z.object({}).passthrough().openapi('CodCheckoutBody');
@@ -92,7 +92,8 @@ cod.openapi(codCheckout, async (c) => {
       if (!allowed.includes((addr.country ?? '').toUpperCase())) {
         throw ApiError.invalidRequest('Payment on delivery is not available for this country.');
       }
-      if (!addr.postal_code || addr.postal_code.replace(/\D/g, '').length < 8) {
+      // New carts carry a validated `phone`; carts built by an older storefront page kept it in postal_code.
+      if (!addr.phone && (addr.postal_code ?? '').replace(/\D/g, '').length < 8) {
         throw ApiError.invalidRequest('A phone number is required for payment on delivery.');
       }
     }

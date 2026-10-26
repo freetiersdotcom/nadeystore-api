@@ -86,6 +86,7 @@ export interface ShippingAddress {
   city:        string;
   state:       string | null;
   postal_code: string;
+  phone:       string | null;
   country:     string;
 }
 
@@ -267,7 +268,8 @@ export async function prepareCheckout(
         line2:       parsed.line2 ?? null,
         city:        parsed.city,
         state:       parsed.state ?? null,
-        postal_code: parsed.postal_code,
+        postal_code: parsed.postal_code ?? '',
+        phone:       parsed.phone ?? null,
         country:     parsed.country,
       };
     } catch {
@@ -351,6 +353,7 @@ export interface SetShippingInput {
   city:         string;
   state?:       string | null;
   postal_code:  string;
+  phone?:       string | null;
   country:      string;
 }
 

@@ -6,6 +6,7 @@ import { dispatchWebhooks } from '../lib/webhooks';
 import { createOrderFromCart } from '../lib/orders';
 import { recordPayment, paymentState, MANUAL_PAYMENT_METHODS } from '../lib/payments';
 import { ErrorResponse } from '../schemas';
+import { resolveContact } from '../lib/geo';
 
 // =============================================================================
 // Payments on an order + orders entered by hand
@@ -207,7 +208,8 @@ const ManualOrderBody = z.object({
     line2: z.string().nullable().optional(),
     city: z.string().min(1),
     state: z.string().nullable().optional(),
-    postal_code: z.string().min(1).openapi({ description: 'Phone number or postal code (same convention as the storefront form).' }),
+    postal_code: z.string().max(20).optional().default('').openapi({ description: 'Required only for countries that use postal codes.' }),
+    phone: z.string().max(40).nullable().optional().openapi({ description: 'International format; stored as E.164.' }),
     country: z.string().length(2),
   }).optional(),
   currency: z.string().length(3).toUpperCase().default('XOF'),
@@ -285,12 +287,14 @@ payments.openapi(createManual, async (c) => {
   // Build a checked-out cart with reserved stock, then reuse the normal order
   // creation (customer upsert, stock, webhooks) so there is a single code path.
   const cartId = uuid();
-  const { line1, line2, city, state, postal_code, country } = body.address ?? {} as any;
+  const { line1, line2, city, state } = body.address ?? {} as any;
+  // Counter and phone orders: a phone is welcome but not compulsory, postal rules still apply.
+  const contact = body.address ? resolveContact(body.address, { phoneRequired: false }) : null;
   await db.run(
     `INSERT INTO carts (id, status, customer_email, currency, ship_to, shipping_name, locale, expires_at)
      VALUES (?, 'checked_out', ?, ?, ?, ?, ?, ?)`,
     [cartId, body.customer_email, body.currency,
-     body.address ? JSON.stringify({ line1, line2: line2 ?? null, city, state: state ?? null, postal_code, country }) : null,
+     body.address ? JSON.stringify({ line1, line2: line2 ?? null, city, state: state ?? null, postal_code: contact!.postal_code, phone: contact!.phone, country: contact!.country }) : null,
      body.customer_name ?? null, body.locale, new Date(Date.now() + 3600_000).toISOString()]
   );
   for (const l of lines) {

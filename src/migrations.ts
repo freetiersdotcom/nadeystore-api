@@ -77,6 +77,7 @@ ALTER TABLE variants ADD COLUMN digital_asset_key TEXT;
 ALTER TABLE variants ADD COLUMN updated_at TEXT;
 ALTER TABLE carts ADD COLUMN ship_to TEXT;
 ALTER TABLE carts ADD COLUMN shipping_name TEXT;
+ALTER TABLE carts ADD COLUMN contact_phone TEXT;
 ALTER TABLE orders ADD COLUMN cart_id TEXT;
 ALTER TABLE orders ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN review_reason TEXT;

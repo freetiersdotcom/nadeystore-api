@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
 import { getDb } from '../db';
 import { ApiError, now, type HonoEnv } from '../types';
+import { normalizePhone, resolveContact } from '../lib/geo';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import {
   IdParam,
@@ -250,8 +251,12 @@ app.openapi(updateCustomer, async (c) => {
     params.push(body.name);
   }
   if (body.phone !== undefined) {
+    // Stored in international format so it can be dialled or messaged as is.
+    const raw = (body.phone ?? '').trim();
+    const phone = raw ? normalizePhone(raw) : null;
+    if (raw && !phone) throw ApiError.invalidRequest('Enter a valid phone number, with its country code (e.g. +229 01 61 00 00 00).');
     updates.push('phone = ?');
-    params.push(body.phone);
+    params.push(phone);
   }
   if (body.accepts_marketing !== undefined) {
     updates.push('accepts_marketing = ?');
@@ -303,6 +308,8 @@ app.openapi(createAddress, async (c) => {
   const [customer] = await db.query<any>(`SELECT id FROM customers WHERE id = ?`, [id]);
   if (!customer) throw ApiError.notFound('Customer');
 
+  // Same rules as checkout: known country, postal code where the country needs one, phone in E.164 (optional here).
+  const contact = resolveContact(body, { phoneRequired: false });
   const addressId = crypto.randomUUID();
 
   if (body.is_default) {
@@ -329,9 +336,9 @@ app.openapi(createAddress, async (c) => {
       body.line2 || null,
       body.city,
       body.state || null,
-      body.postal_code,
-      body.country || 'US',
-      body.phone || null,
+      contact.postal_code,
+      contact.country,
+      contact.phone,
     ]
   );
 

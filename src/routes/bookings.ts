@@ -135,14 +135,14 @@ bookings.get('/agenda', adminOnly, async (c) => {
   const to = q.to ? new Date(q.to).toISOString() : iso(Date.now() + 60 * 86400_000);
   const items = await db.query<any>(
     `SELECT a.id, a.sku, a.title, a.status, a.starts_at, a.ends_at, a.customer_tz, a.order_id, a.reminder_sent_at,
-            o.number AS order_number, o.customer_email, o.shipping_name AS customer_name, o.status AS order_status
+            o.number AS order_number, o.customer_email, o.shipping_name AS customer_name, o.shipping_phone AS customer_phone, o.status AS order_status
      FROM appointments a LEFT JOIN orders o ON o.id = a.order_id
      WHERE a.starts_at >= ? AND a.starts_at <= ? AND ${q.status === 'all' ? "a.status IN ('booked','canceled')" : 'a.status = ?'}
      ORDER BY a.starts_at`,
     q.status === 'all' ? [from, to] : [from, to, q.status]);
   const blocks = await db.query<any>(`SELECT * FROM booking_blocks WHERE ends_at >= ? AND starts_at <= ? ORDER BY starts_at`, [from, to]);
   const unscheduled = await db.query<any>(
-    `SELECT o.id AS order_id, o.number AS order_number, o.customer_email, o.created_at, o.needs_review, o.review_reason
+    `SELECT o.id AS order_id, o.number AS order_number, o.customer_email, o.shipping_phone AS customer_phone, o.created_at, o.needs_review, o.review_reason
      FROM orders o WHERE o.service_status = 'to_schedule' AND o.status <> 'canceled' ORDER BY o.created_at DESC LIMIT 50`);
   return c.json({ items, blocks, unscheduled });
 });

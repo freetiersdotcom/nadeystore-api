@@ -524,9 +524,9 @@ export const CreateAddressBody = z.object({
   line2: z.string().optional(),
   city: z.string().min(1),
   state: z.string().optional(),
-  postal_code: z.string().min(1),
-  country: z.string().optional().default('US'),
-  phone: z.string().optional(),
+  postal_code: z.string().max(20).optional().default('').openapi({ description: 'Required only for countries that use postal codes.' }),
+  country: z.string().length(2).openapi({ example: 'BJ', description: 'ISO 3166-1 alpha-2' }),
+  phone: z.string().max(40).optional().openapi({ description: 'International format; stored as E.164.' }),
 }).openapi('CreateAddress');
 
 export const AddressResponse = z.object({

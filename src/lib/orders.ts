@@ -116,12 +116,15 @@ export async function createOrderFromCart(
   // Parse shipping address from cart (set via PATCH /v1/carts/:id/shipping)
   let shippingAddress: any = null;
   let shippingName: string | null = cart.shipping_name ?? null;
+  // Phone: from the delivery address, or (service-only carts, no address) from the cart's contact phone.
+  let contactPhone: string | null = null;
 
   if (cart.ship_to) {
     try {
       shippingAddress = JSON.parse(cart.ship_to);
     } catch { /* malformed — proceed without */ }
   }
+  contactPhone = shippingAddress?.phone ?? cart.contact_phone ?? null;
 
   const orderId     = uuid();
   const orderNumber = generateOrderNumber();
@@ -182,16 +185,24 @@ export async function createOrderFromCart(
 
       await db.run(
         `INSERT INTO customer_addresses
-           (id, customer_id, is_default, name, line1, line2, city, state, postal_code, country)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, customer_id, is_default, name, line1, line2, city, state, postal_code, country, phone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           uuid(), customerId, isDefault, shippingName,
           shippingAddress.line1, shippingAddress.line2 ?? null,
           shippingAddress.city,  shippingAddress.state ?? null,
-          shippingAddress.postal_code, shippingAddress.country,
+          shippingAddress.postal_code ?? '', shippingAddress.country, shippingAddress.phone ?? null,
         ]
       );
     }
+  }
+
+  // Keep the customer's phone: the first one we receive stays until the merchant edits it.
+  if (contactPhone && customerId) {
+    await db.run(
+      `UPDATE customers SET phone = ? WHERE id = ? AND (phone IS NULL OR phone = '')`,
+      [contactPhone, customerId]
+    );
   }
 
   // ── Create order ──────────────────────────────────────────────────────────
@@ -205,7 +216,7 @@ export async function createOrderFromCart(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId, customerId, orderNumber, orderStatus, customerEmail,
-      shippingName, null,
+      shippingName, contactPhone,
       shippingAddress ? JSON.stringify(shippingAddress) : null,
       subtotalCents,
       totalCents, currency,
