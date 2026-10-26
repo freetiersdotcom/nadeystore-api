@@ -54,12 +54,13 @@ depositRoutes.openapi(createRoute({
   const items = await db.query<any>(`SELECT * FROM cart_items WHERE cart_id = ?`, [cartId]);
   const subtotal = items.reduce((s: number, i: any) => s + i.unit_price_cents * i.qty, 0);
   const total = subtotal - Number(cart.discount_amount_cents ?? 0);
-  return c.json(await computeDeposit(db, c.env as any, items, subtotal, total, cart.currency ?? 'XOF'), 200);
+  return c.json(await computeDeposit(db, c.env as any, items, subtotal, total, cart.currency ?? 'XOF', Number(cart.shipping_cents ?? 0)), 200);
 });
 
 const PreviewBody = z.object({
   currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
   items: z.array(z.object({ sku: z.string().min(1), qty: z.number().int().positive().max(999) })).min(1).max(50),
+  shipping_cents: z.number().int().min(0).optional().openapi({ description: 'Delivery price already quoted to the customer, shown in the balance (display only; checkout recomputes it).' }),
 }).openapi('DepositPreviewBody');
 
 depositRoutes.openapi(createRoute({
@@ -69,7 +70,7 @@ depositRoutes.openapi(createRoute({
   request: { body: { content: { 'application/json': { schema: PreviewBody } } } },
   responses: { 200: j('Quote', Quote), 400: err('Unknown SKU') },
 }), async (c) => {
-  const { items, currency: wanted } = c.req.valid('json');
+  const { items, currency: wanted, shipping_cents } = c.req.valid('json');
   const db = getDb(c.var.db);
   const lines: Array<{ sku: string; qty: number; unit_price_cents: number }> = [];
   let currency = wanted ? wanted.toUpperCase() : 'XOF';
@@ -80,7 +81,7 @@ depositRoutes.openapi(createRoute({
     lines.push({ sku: it.sku, qty: it.qty, unit_price_cents: Number(v.price_cents) });
   }
   const subtotal = lines.reduce((s, l) => s + l.unit_price_cents * l.qty, 0);
-  return c.json(await computeDeposit(db, c.env as any, lines, subtotal, subtotal, currency), 200);
+  return c.json(await computeDeposit(db, c.env as any, lines, subtotal, subtotal, currency, shipping_cents ?? 0), 200);
 });
 
 const DepositCheckoutBody = z.object({
@@ -120,7 +121,7 @@ depositRoutes.openapi(createRoute({
 
   let quote;
   try {
-    quote = await computeDeposit(db, c.env as any, prepared.items, prepared.subtotal_cents, prepared.final_amount_cents, prepared.currency);
+    quote = await computeDeposit(db, c.env as any, prepared.items, prepared.subtotal_cents, prepared.final_amount_cents - prepared.shipping_cents, prepared.currency, prepared.shipping_cents);
     if (!quote.eligible) {
       throw ApiError.invalidRequest(`A deposit is not available for this cart (${quote.reason}).`);
     }

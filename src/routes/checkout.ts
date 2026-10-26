@@ -81,6 +81,8 @@ async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
     `SELECT id, number, needs_review FROM orders WHERE cart_id = ? LIMIT 1`, [cart.id]
   );
 
+  const shippingCents = Math.max(Number(cart.shipping_cents ?? 0), 0);
+
   return {
     id:             cart.id,
     status:         cart.status,
@@ -97,9 +99,9 @@ async function buildCartResponse(db: ReturnType<typeof getDb>, cart: any) {
     totals: {
       subtotal_cents:  subtotalCents,
       discount_cents:  discountAmountCents,
-      shipping_cents:  0,
+      shipping_cents:  shippingCents,
       tax_cents:       0,
-      total_cents:     subtotalCents - discountAmountCents,
+      total_cents:     subtotalCents - discountAmountCents + shippingCents,
     },
     expires_at: cart.expires_at,
     order: order
@@ -380,18 +382,32 @@ app.openapi(checkoutCart, async (c) => {
         quantity: item.qty,
       }));
 
+    // Delivery is charged as its own line (the amount was frozen on the cart by prepareCheckout).
+    if (prepared.shipping_cents > 0) {
+      lineItems.push({
+        price_data: {
+          currency:     prepared.currency.toLowerCase(),
+          product_data: { name: prepared.shipping_label || 'Shipping' },
+          unit_amount:  prepared.shipping_cents,
+        },
+        quantity: 1,
+      });
+    }
+
     // Build Stripe coupon for discount if applicable
     let stripeCouponId: string | null = null;
     if (prepared.discount && prepared.discount_amount_cents > 0) {
       const d = prepared.discount;
-      const needsOnTheFly = d.type === 'percentage' && d.max_discount_cents;
+      // With a delivery line, a percentage coupon would also discount the shipping: send the exact amount instead.
+      const exactAmount = prepared.shipping_cents > 0;
+      const needsOnTheFly = exactAmount || (d.type === 'percentage' && d.max_discount_cents);
 
       if (d.stripe_coupon_id && !needsOnTheFly) {
         stripeCouponId = d.stripe_coupon_id;
       } else {
         try {
           const couponParams: Stripe.CouponCreateParams = { duration: 'once' };
-          if (d.type === 'percentage' && d.max_discount_cents) {
+          if (exactAmount || (d.type === 'percentage' && d.max_discount_cents)) {
             couponParams.amount_off = prepared.discount_amount_cents;
             couponParams.currency   = prepared.currency.toLowerCase();
           } else if (d.type === 'percentage') {

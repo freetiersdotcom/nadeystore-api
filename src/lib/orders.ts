@@ -111,7 +111,9 @@ export async function createOrderFromCart(
   const discountId           = cart.discount_id ?? null;
   const currency             = cart.currency ?? 'USD';
   const customerEmail        = cart.customer_email;
-  const totalCents           = subtotalCents - discountAmountCents;
+  const shippingCents        = Math.max(Number(cart.shipping_cents ?? 0), 0);
+  const shippingLabel        = cart.shipping_label ?? null;
+  const totalCents           = subtotalCents - discountAmountCents + shippingCents;
 
   // Parse shipping address from cart (set via PATCH /v1/carts/:id/shipping)
   let shippingAddress: any = null;
@@ -212,16 +214,16 @@ export async function createOrderFromCart(
         shipping_name, shipping_phone, ship_to,
         subtotal_cents, tax_cents, shipping_cents, total_cents, currency,
         discount_code, discount_id, discount_amount_cents,
-        cart_id, needs_review, review_reason, payment_method, amount_paid_cents, paid_at, locale)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cart_id, needs_review, review_reason, payment_method, amount_paid_cents, paid_at, locale, shipping_label)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       orderId, customerId, orderNumber, orderStatus, customerEmail,
       shippingName, contactPhone,
       shippingAddress ? JSON.stringify(shippingAddress) : null,
       subtotalCents,
-      totalCents, currency,
+      shippingCents, totalCents, currency,
       discountCode, discountId, discountAmountCents,
-      cartId, needsReview ? 1 : 0, reviewReason, paymentMethod, amountPaid, paidAt, orderLocale,
+      cartId, needsReview ? 1 : 0, reviewReason, paymentMethod, amountPaid, paidAt, orderLocale, shippingLabel,
     ]
   );
 
@@ -400,7 +402,7 @@ export async function createOrderFromCart(
           ? { code: discountCode, amount_cents: discountAmountCents }
           : null,
         tax_cents:        0,
-        shipping_cents:   0,
+        shipping_cents:   shippingCents,
         total_cents:      totalCents,
         currency,
         shipping_address: shippingAddress
@@ -465,7 +467,7 @@ export async function createOrderFromCart(
         subtotal_cents:  subtotalCents,
         discount_cents:  discountAmountCents,
         tax_cents:       0,
-        shipping_cents:  0,
+        shipping_cents:  shippingCents,
         total_cents:     totalCents,
         currency,
       },

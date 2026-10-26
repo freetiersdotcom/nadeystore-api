@@ -24,6 +24,7 @@ import type { Database } from '../db';
 import { ApiError, uuid, now } from '../types';
 import { validateDiscount, calculateDiscount, type Discount } from '../routes/discounts';
 import { assertBookingsReady } from './appointments';
+import { resolveCartShipping } from './shipping';
 
 // Currencies natively supported by each provider.
 // If the cart currency is not in the provider's list, we either convert
@@ -51,7 +52,9 @@ export interface PreparedCheckout {
   items:                CartItemRow[];
   subtotal_cents:       number;
   discount_amount_cents: number;
-  final_amount_cents:   number;   // subtotal - discount; what to charge the customer
+  final_amount_cents:   number;   // subtotal - discount + shipping; what to charge the customer
+  shipping_cents:       number;   // delivery price, frozen on the cart (0 when shipping is off / nothing to deliver)
+  shipping_label:       string | null;
   currency:             string;
   discount:             Discount | null;
   shipping_address:     ShippingAddress | null;
@@ -68,6 +71,10 @@ interface CartRow {
   discount_amount_cents: number;
   ship_to:              string | null;  // JSON string
   shipping_name:        string | null;
+  shipping_rate_id?:    string | null;
+  shipping_cents?:      number | null;
+  shipping_label?:      string | null;
+  locale?:              string | null;
 }
 
 interface CartItemRow {
@@ -140,6 +147,16 @@ export async function prepareCheckout(
   const subtotalCents = items.reduce(
     (sum, item) => sum + item.unit_price_cents * item.qty, 0
   );
+
+  // Delivery price: computed from the address and weight, then frozen on the cart so that every
+  // payment path (card, mobile money, cash on delivery, deposit) charges the same amount.
+  let shipping = { cents: 0, label: null as string | null, rate_id: null as string | null };
+  try {
+    shipping = await resolveCartShipping(db, cart, items, cart.discount_amount_cents ?? 0);
+  } catch (e) {
+    await db.run(`UPDATE carts SET status = 'open', updated_at = ? WHERE id = ?`, [now(), cartId]);
+    throw e;
+  }
 
   // ── 3. Validate and reserve discount ─────────────────────────────────────
   let discountAmountCents = cart.discount_amount_cents ?? 0;
@@ -329,7 +346,9 @@ export async function prepareCheckout(
     items,
     subtotal_cents:        subtotalCents,
     discount_amount_cents: discountAmountCents,
-    final_amount_cents:    subtotalCents - discountAmountCents,
+    final_amount_cents:    subtotalCents - discountAmountCents + shipping.cents,
+    shipping_cents:        shipping.cents,
+    shipping_label:        shipping.label,
     currency:              cartCurrency,
     discount,
     shipping_address:      shippingAddress,

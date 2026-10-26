@@ -104,10 +104,11 @@ export async function computeDeposit(
   items: Array<{ sku: string; qty: number; unit_price_cents: number }>,
   subtotalCents: number,
   totalCents: number,
-  currency: string
+  currency: string,
+  shippingCents = 0   // delivery is part of the balance: the deposit itself comes from the goods only
 ): Promise<DepositQuote> {
   const settings = await getPlanSettings(db);
-  const base = { total_cents: totalCents, deposit_cents: 0, balance_cents: totalCents, currency, due_days: settings.due_days };
+  const base = { total_cents: totalCents + shippingCents, deposit_cents: 0, balance_cents: totalCents + shippingCents, currency, due_days: settings.due_days };
   if (!(await providerAvailable(db, env, currency))) return { ...base, eligible: false, reason: 'no_provider' };
 
   let raw = 0;
@@ -142,7 +143,7 @@ export async function computeDeposit(
   const scaled = subtotalCents > 0 ? Math.ceil((raw * totalCents) / subtotalCents) : raw;
   const deposit = Math.max(1, Math.min(scaled, totalCents));
   if (deposit >= totalCents) return { ...base, eligible: false, reason: 'not_less_than_total' };
-  return { ...base, due_days: Number.isFinite(dueDays) ? dueDays : settings.due_days, eligible: true, deposit_cents: deposit, balance_cents: totalCents - deposit };
+  return { ...base, due_days: Number.isFinite(dueDays) ? dueDays : settings.due_days, eligible: true, deposit_cents: deposit, balance_cents: totalCents + shippingCents - deposit };
 }
 
 /** Days to pay the balance of an order created from this cart: the shortest period set on its deposit products (store default when a product has none). */

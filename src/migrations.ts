@@ -117,7 +117,14 @@ CREATE TABLE IF NOT EXISTS booking_blocks (id TEXT PRIMARY KEY, product_id TEXT,
 CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, resource_id TEXT NOT NULL DEFAULT 'default', product_id TEXT NOT NULL, sku TEXT NOT NULL, title TEXT NOT NULL, cart_id TEXT, order_id TEXT, status TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, customer_tz TEXT, hold_expires_at TEXT, reminder_sent_at TEXT, canceled_at TEXT, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_appointments_time ON appointments(starts_at, status);
 CREATE INDEX IF NOT EXISTS idx_appointments_cart ON appointments(cart_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_order ON appointments(order_id)
+CREATE INDEX IF NOT EXISTS idx_appointments_order ON appointments(order_id);
+CREATE TABLE IF NOT EXISTS shipping_zones (id TEXT PRIMARY KEY, name TEXT NOT NULL, countries TEXT NOT NULL DEFAULT '[]', regions TEXT NOT NULL DEFAULT '[]', active INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+CREATE TABLE IF NOT EXISTS shipping_rates (id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, name_fr TEXT NOT NULL, name_en TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'flat', flat_cents INTEGER NOT NULL DEFAULT 0, bands TEXT NOT NULL DEFAULT '[]', over_per_kg_cents INTEGER, free_over_cents INTEGER, min_days INTEGER, max_days INTEGER, pickup_address TEXT, active INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_shipping_rates_zone ON shipping_rates(zone_id);
+ALTER TABLE carts ADD COLUMN shipping_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE carts ADD COLUMN shipping_label TEXT;
+ALTER TABLE carts ADD COLUMN shipping_rate_id TEXT;
+ALTER TABLE orders ADD COLUMN shipping_label TEXT
 `;
 
 // The download_tokens table and its indexes go into SCHEMA (already uses IF NOT EXISTS).
