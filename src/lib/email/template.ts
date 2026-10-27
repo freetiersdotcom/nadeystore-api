@@ -52,6 +52,8 @@ export interface OrderConfirmationData {
   discount?: TemplateDiscount | null;
   tax_cents: number;
   shipping_cents: number;
+  /** Name of the chosen delivery option, e.g. "Livraison par coursier" (shown next to the shipping line). */
+  shipping_label?: string | null;
   total_cents: number;
   currency?: string;
   locale?: string; // e.g. 'fr-FR', 'en-US' — defaults to 'fr-FR'
@@ -242,18 +244,19 @@ function renderTotals(data: OrderConfirmationData): string {
     </tr>`);
   }
 
+  const shipLabel = data.shipping_label ? ` (${esc(data.shipping_label)})` : '';
   // Service-only orders have no shipping line at all (no "Free" noise).
   const onlyServices = data.items.length > 0 && data.items.every(i => i.product_type === 'service');
   if (data.shipping_cents > 0) {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">${t('totals.shipping')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${t('totals.shipping')}${shipLabel}</td>
       <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${formatAmount(data.shipping_cents, cur, loc)}</td>
     </tr>`);
   } else if (!onlyServices) {
     rows.push(`
     <tr>
-      <td style="padding: 8px 0; font-size: 14px; color: #666;">${t('totals.shipping')}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #666;">${t('totals.shipping')}${shipLabel}</td>
       <td style="padding: 8px 0; font-size: 14px; color: #111; text-align: right;">${t('totals.shipping.free')}</td>
     </tr>`);
   }
@@ -403,9 +406,10 @@ export function renderOrderConfirmation(data: OrderConfirmationData): { html: st
   ).join('\n');
 
   const onlyServices = data.items.length > 0 && data.items.every(i => i.product_type === 'service');
+  const textLabel = data.shipping_label ? ` (${data.shipping_label})` : '';
   const shippingLine = data.shipping_cents > 0
-    ? `${t('text.shipping')} ${formatAmount(data.shipping_cents, cur, loc)}`
-    : onlyServices ? null : `${t('text.shipping')} ${t('text.shipping.free')}`;
+    ? `${t('text.shipping')}${textLabel} ${formatAmount(data.shipping_cents, cur, loc)}`
+    : onlyServices ? null : `${t('text.shipping')}${textLabel} ${t('text.shipping.free')}`;
 
   const text = [
     `${data.store_name} — ${t('text.title')}`,
