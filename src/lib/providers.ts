@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { parseConfig } from './config-secrets';
 import type { Database } from '../db';
 import { ApiError } from '../types';
 import { PROVIDER_CURRENCIES } from './checkout';
@@ -39,7 +40,7 @@ export interface ProviderEnv { STRIPE_SECRET_KEY?: string }
 async function configJson(db: Database, key: string): Promise<any | null> {
   const [row] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = ? LIMIT 1`, [key]);
   if (!row?.value) return null;
-  try { return JSON.parse(row.value); } catch { return null; }
+  try { return await parseConfig(key, row.value); } catch (err) { console.error('[config] unreadable', key, (err as Error).message); return null; }
 }
 
 const fedapay: PaymentProvider = {

@@ -1,5 +1,8 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { cors } from 'hono/cors';
+import { corsMiddleware } from './middleware/cors';
+import { authRoutes } from './routes/auth';
+import { purgeAuthData } from './auth/service';
+import { setConfigKey } from './lib/config-secrets';
 import { swaggerUI } from '@hono/swagger-ui';
 import { setup } from './routes/setup';
 import { catalog } from './routes/catalog';
@@ -36,9 +39,10 @@ type Variables = {
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-app.use('*', cors());
+app.use('*', corsMiddleware());
 
 app.use('*', async (c, next) => {
+  setConfigKey(c.env.CONFIG_ENCRYPTION_KEY);
   const id = c.env.MERCHANT.idFromName('default');
   const stub = c.env.MERCHANT.get(id);
   c.set('db', stub as unknown as DOStub);
@@ -69,6 +73,7 @@ app.onError((err, c) => {
 app.get('/', (c) => c.json({ name: 'merchant', version: '0.1.0', ok: true }));
 
 app.route('/v1/setup', setup);
+app.route('/v1/auth', authRoutes);
 app.route('/v1/products', catalog);
 app.route('/v1/inventory', inventory);
 app.route('/v1/carts', checkout);
@@ -114,6 +119,7 @@ app.get('/docs', swaggerUI({ url: '/openapi.json' }));
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    setConfigKey(env.CONFIG_ENCRYPTION_KEY);
     const id = env.MERCHANT.idFromName('default');
     const stub = env.MERCHANT.get(id);
     const typedStub = stub as unknown as {
@@ -137,6 +143,11 @@ export default {
       console.log(`Cron: appointments — ${appts.reminded} reminded`);
     } catch (err) {
       console.error('Cron: appointment sweep failed', err);
+    }
+    try {
+      await purgeAuthData(getDb(stub as unknown as DOStub));
+    } catch (err) {
+      console.error('Cron: auth cleanup failed', err);
     }
     const staleCheckouts = await typedStub.cleanupStaleCheckedOutCarts();
     console.log(`Cron: released ${staleCheckouts} stale checked-out carts`);

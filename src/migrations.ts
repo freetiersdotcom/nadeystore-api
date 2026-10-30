@@ -72,6 +72,12 @@ CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expire
 // See the MIGRATIONS constant below for the exact statements to use.
 
 export const MIGRATIONS = `
+ALTER TABLE api_keys ADD COLUMN label TEXT;
+ALTER TABLE api_keys ADD COLUMN last4 TEXT;
+ALTER TABLE api_keys ADD COLUMN created_by TEXT;
+ALTER TABLE api_keys ADD COLUMN last_used_at TEXT;
+ALTER TABLE api_keys ADD COLUMN revoked_at TEXT;
+ALTER TABLE api_keys ADD COLUMN expires_at TEXT;
 ALTER TABLE variants ADD COLUMN product_type TEXT NOT NULL DEFAULT 'physical' CHECK (product_type IN ('physical', 'digital', 'service'));
 ALTER TABLE variants ADD COLUMN digital_asset_key TEXT;
 ALTER TABLE variants ADD COLUMN updated_at TEXT;
@@ -176,4 +182,76 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_submissions_ip ON submissions(ip_hash, created_at)
+`;
+
+// People who sign in to the admin, their sessions, sign-in tokens, throttling and the audit trail.
+// (Each statement is run on its own, so none may contain a semicolon.)
+export const AUTH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  name          TEXT,
+  role          TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'staff', 'agency')),
+  status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  password_hash TEXT,
+  locale        TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT,
+  last_login_at TEXT,
+  created_by    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id),
+  token_hash   TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  idle_seconds INTEGER NOT NULL,
+  ip           TEXT,
+  user_agent   TEXT,
+  via          TEXT NOT NULL DEFAULT 'bearer',
+  revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS login_tokens (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  token_hash  TEXT NOT NULL UNIQUE,
+  code_hash   TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  expires_at  TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at  TEXT NOT NULL,
+  purpose     TEXT NOT NULL DEFAULT 'login'
+);
+CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS identities (
+  provider   TEXT NOT NULL,
+  subject    TEXT NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (provider, subject)
+);
+
+CREATE TABLE IF NOT EXISTS auth_throttle (
+  key          TEXT PRIMARY KEY,
+  count        INTEGER NOT NULL,
+  window_start INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id            TEXT PRIMARY KEY,
+  at            TEXT NOT NULL,
+  actor_user_id TEXT,
+  actor         TEXT,
+  action        TEXT NOT NULL,
+  target        TEXT,
+  ip            TEXT,
+  meta          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at)
 `;

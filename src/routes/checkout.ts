@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import { parseConfig } from '../lib/config-secrets';
 import { z } from '@hono/zod-openapi';
 import Stripe from 'stripe';
 import { getDb } from '../db';
@@ -531,7 +532,7 @@ app.openapi(fedaPayCheckout, async (c) => {
 
   const [config] = await db.query<any>(`SELECT * FROM config WHERE key = 'fedapay'`);
   if (!config?.value) throw ApiError.invalidRequest('FedaPay not configured. POST /v1/setup/fedapay first.');
-  const fedaPayConfig = JSON.parse(config.value);
+  const fedaPayConfig = await parseConfig('fedapay', config.value);
 
   const prepared = await prepareCheckout(db, cartId, 'fedapay');
 

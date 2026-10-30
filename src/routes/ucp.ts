@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { parseConfig } from '../lib/config-secrets';
 import Stripe from 'stripe';
 import { getDb, type Database } from '../db';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
@@ -144,7 +145,7 @@ async function getStripeConfig(db: Database): Promise<{ secretKey: string | null
   );
   if (!config) return { secretKey: null, webhookSecret: null };
   try {
-    const parsed = JSON.parse(config.value);
+    const parsed = await parseConfig('stripe', config.value);
     return { 
       secretKey: parsed.secret_key || null,
       webhookSecret: parsed.webhook_secret || null,

@@ -65,6 +65,7 @@ export async function createEmailProvider(config: EmailConfig): Promise<EmailPro
 // ============================================================
 
 import type { Database } from '../../db';
+import { parseConfig } from '../config-secrets';
 
 export async function getEmailProvider(db: Database): Promise<EmailProvider | null> {
   const [row] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'email' LIMIT 1`);
@@ -72,7 +73,7 @@ export async function getEmailProvider(db: Database): Promise<EmailProvider | nu
 
   let cfg: EmailConfig;
   try {
-    cfg = JSON.parse(row.value) as EmailConfig;
+    cfg = await parseConfig<EmailConfig>('email', row.value);
   } catch {
     return null;
   }

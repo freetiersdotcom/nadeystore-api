@@ -15,6 +15,15 @@ export type Env = {
   /** Seconds to wait after the first catalog edit before triggering the rebuild (default 60, minimum 10). */
   REBUILD_DEBOUNCE_SECONDS?: string;
 
+  /** Comma-separated origins allowed for credentialed requests and /v1/auth/*, e.g. "https://admin.myshop.com,http://localhost:5173". */
+  ADMIN_ORIGINS?: string;
+  /** Base URL of the admin app, used in sign-in links. Defaults to the first ADMIN_ORIGINS entry. */
+  ADMIN_URL?: string;
+  /** Secret mixed into password hashes and sign-in codes. Set with `wrangler secret put PASSWORD_PEPPER`; do not change once users have passwords. */
+  PASSWORD_PEPPER?: string;
+  /** Encrypts Stripe / FedaPay / email provider keys stored in the database. Set with `wrangler secret put CONFIG_ENCRYPTION_KEY` (32+ random characters). */
+  CONFIG_ENCRYPTION_KEY?: string;
+
   TURNSTILE_SECRET?: string;      // wrangler secret put TURNSTILE_SECRET
   CONTACT_NOTIFY_EMAIL?: string;  // optional: also email each message to this address
 };
@@ -38,12 +47,24 @@ export type HonoEnv = {
 
 export type AuthRole = 'public' | 'admin' | 'oauth';
 
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: 'owner' | 'manager' | 'staff' | 'agency';
+};
+
 export type AuthContext = {
   role: AuthRole;
   stripeSecretKey: string | null;
   stripeWebhookSecret: string | null;
   oauthScopes?: string[];
   customerEmail?: string;
+  /** Set when the caller signed in as a person (session). Absent for API keys and OAuth tokens. */
+  user?: AuthUser;
+  /** How the caller authenticated. */
+  via?: 'api_key' | 'bearer' | 'cookie' | 'oauth';
+  sessionId?: string;
 };
 
 export class ApiError extends Error {

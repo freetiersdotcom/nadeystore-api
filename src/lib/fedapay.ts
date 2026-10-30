@@ -152,7 +152,8 @@ export async function createFedaPayCheckout(opts: {
 /**
  * Re-verify a transaction's status directly via FedaPay API.
  * Use for high-value orders as an extra safety check after webhook receipt.
- * Non-fatal — callers should log and proceed if this fails.
+ * Throws when FedaPay cannot be reached or answers with an error: callers must
+ * treat that as "not confirmed" (fail closed), never as approved.
  */
 export async function verifyFedaPayTransaction(
   transactionId: number,
@@ -164,12 +165,13 @@ export async function verifyFedaPayTransaction(
 
   const res = await fetch(`${base}/v1/transactions/${transactionId}`, {
     headers: { Authorization: `Bearer ${config.secret_key}` },
+    signal: AbortSignal.timeout(8000),
   });
 
   if (!res.ok) throw new Error(`FedaPay API returned ${res.status}`);
 
   const data = await res.json() as Record<string, any>;
   const transaction = data['v1/transaction'];
-  console.log('fedapay transaction status:', JSON.stringify(transaction.status));
+  if (!transaction) throw new Error('FedaPay API returned no transaction');
   return transaction.status === 'approved' ? 'approved' : 'other';
 }

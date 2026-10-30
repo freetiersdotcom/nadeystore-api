@@ -1,6 +1,13 @@
 import { createMiddleware } from 'hono/factory';
+import { parseConfig } from '../lib/config-secrets';
 import { getDb } from '../db';
 import { ApiError, now, type HonoEnv } from '../types';
+import { isAllowedOrigin, readSessionCookie } from '../auth/http';
+import { lookupSession, SESSION_PREFIX } from '../auth/service';
+import { roleCanRequest, type Permission, roleCan, oauthScopeFor } from '../auth/permissions';
+import { lookupApiKey } from '../auth/keys';
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 // ============================================================
 // AUTH MIDDLEWARE
@@ -8,12 +15,14 @@ import { ApiError, now, type HonoEnv } from '../types';
 
 export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
   const authHeader = c.req.header('Authorization');
+  const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  // A session cookie is only considered when no Authorization header is sent.
+  const cookieToken = bearer === null ? readSessionCookie(c) : undefined;
 
-  if (!authHeader?.startsWith('Bearer ')) {
+  if (bearer === null && !cookieToken) {
     throw ApiError.unauthorized('Missing or invalid Authorization header');
   }
 
-  const token = authHeader.slice(7);
   const db = getDb(c.var.db);
   
   let stripeSecretKey = c.env.STRIPE_SECRET_KEY || null;
@@ -26,7 +35,7 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
     );
     if (configRow) {
       try {
-        const parsed = JSON.parse(configRow.value);
+        const parsed = await parseConfig('stripe', configRow.value);
         stripeSecretKey = parsed.secret_key || null;
         stripeWebhookSecret = parsed.webhook_secret || null;
       } catch {
@@ -34,6 +43,31 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
       }
     }
   }
+
+  // ── Signed-in person: session token (bearer) or session cookie ──
+  const sessionToken = bearer?.startsWith(SESSION_PREFIX) ? bearer : cookieToken;
+  if (sessionToken) {
+    const via = bearer ? 'bearer' : 'cookie';
+    // Cookies are sent automatically by the browser, so a state-changing request must
+    // come from one of our own origins. (Bearer tokens are not ambient: no check needed.)
+    if (via === 'cookie' && !SAFE_METHODS.has(c.req.method) && !isAllowedOrigin(c.env, c.req.header('Origin'))) {
+      throw ApiError.forbidden('Cross-site request blocked');
+    }
+    const found = await lookupSession(db, sessionToken);
+    if (!found) throw ApiError.unauthorized('Session expired or invalid');
+    c.set('auth', {
+      role: 'admin',
+      stripeSecretKey,
+      stripeWebhookSecret,
+      via,
+      sessionId: found.session_id,
+      user: { id: found.user.id, email: found.user.email, name: found.user.name, role: found.user.role },
+    });
+    await next();
+    return;
+  }
+
+  const token = bearer as string;
 
   const isOAuthToken = token.length === 64 && /^[a-f0-9]+$/.test(token);
   if (isOAuthToken) {
@@ -51,11 +85,19 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
       const row = oauthResult[0];
       c.set('auth', {
         role: 'oauth',
+        via: 'oauth',
         stripeSecretKey,
         stripeWebhookSecret,
         oauthScopes: row.scope?.split(' ') || [],
         customerEmail: row.customer_email,
       });
+
+      // An OAuth token only reaches the routes its scopes allow (deny by default).
+      const need = oauthScopeFor(c.req.method, c.req.path);
+      const granted: string[] = row.scope?.split(' ') || [];
+      if (need === null || (need !== '' && !granted.includes(need))) {
+        throw ApiError.forbidden(need ? `Required scope: ${need}` : 'This route is not available to OAuth tokens');
+      }
 
       await next();
       return;
@@ -63,17 +105,15 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
   }
 
   const keyHash = await hashKey(token);
-  const result = await db.query<any>(
-    `SELECT role FROM api_keys WHERE key_hash = ? LIMIT 1`,
-    [keyHash]
-  );
+  const found = await lookupApiKey(db, keyHash);
 
-  if (result.length === 0) {
+  if (!found) {
     throw ApiError.unauthorized('Invalid API key');
   }
 
   c.set('auth', {
-    role: result[0].role,
+    role: found.role,
+    via: 'api_key',
     stripeSecretKey,
     stripeWebhookSecret,
   });
@@ -88,8 +128,31 @@ export const adminOnly = createMiddleware<HonoEnv>(async (c, next) => {
     throw ApiError.forbidden('Admin access required');
   }
 
+  // A signed-in person is checked against their role. Admin API keys keep full access.
+  if (auth.user) {
+    const { ok, needed } = roleCanRequest(auth.user.role, c.req.method, c.req.path);
+    if (!ok) {
+      throw ApiError.forbidden(needed ? `Your role cannot do this (needs ${needed})` : 'Your role cannot access this route');
+    }
+  }
+
   await next();
 });
+
+/**
+ * Require one specific permission. A signed-in person needs a role that has it;
+ * an admin API key is treated like the agency.
+ */
+export function requirePermission(permission: Permission) {
+  return createMiddleware<HonoEnv>(async (c, next) => {
+    const auth = c.get('auth');
+    if (auth.role !== 'admin') throw ApiError.forbidden('Admin access required');
+    if (auth.user && !roleCan(auth.user.role, permission)) {
+      throw ApiError.forbidden(`Your role cannot do this (needs ${permission})`);
+    }
+    await next();
+  });
+}
 
 export function requireScope(...requiredScopes: string[]) {
   return createMiddleware<HonoEnv>(async (c, next) => {

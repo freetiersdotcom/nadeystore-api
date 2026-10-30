@@ -13,6 +13,11 @@ export default defineConfig({
         bindings: {
           STORE_NAME: 'Test Store',
           IMAGES_URL: 'https://assets.teststore.com',
+          SETUP_TOKEN: 'test-setup-token',
+          ADMIN_ORIGINS: 'https://admin.test.com,http://localhost:5173',
+          ADMIN_URL: 'https://admin.test.com',
+          PASSWORD_PEPPER: 'test-pepper',
+          CONFIG_ENCRYPTION_KEY: 'test-config-encryption-key-0123456789',
         },
       },
     }),

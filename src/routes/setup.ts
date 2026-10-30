@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import { parseConfig, sealConfig } from '../lib/config-secrets';
 import { z } from '@hono/zod-openapi';
 import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
@@ -100,10 +101,10 @@ app.openapi(setupStripe, async (c) => {
 
   const db = getDb(c.var.db);
 
-  const configValue = JSON.stringify({
+  const configValue = await sealConfig('stripe', JSON.stringify({
     secret_key: stripe_secret_key,
     webhook_secret: stripe_webhook_secret || null,
-  });
+  }));
 
   await db.run(
     `INSERT INTO config (key, value, updated_at) VALUES ('stripe', ?, ?)
@@ -187,13 +188,13 @@ app.openapi(setupEmailRoute, async (c) => {
   }
 
   const db = getDb(c.var.db);
-  const configValue = JSON.stringify({
+  const configValue = await sealConfig('email', JSON.stringify({
     provider: body.provider,
     api_key: body.api_key,
     from_address: body.from_address,
     mailgun_domain: body.mailgun_domain ?? null,
     mailgun_region: body.mailgun_region ?? 'us',
-  });
+  }));
 
   await db.run(
     `INSERT INTO config (key, value, updated_at) VALUES ('email', ?, ?)
@@ -244,7 +245,7 @@ app.openapi(getEmailRoute, async (c) => {
   }
 
   try {
-    const cfg = JSON.parse(row.value);
+    const cfg = await parseConfig('email', row.value);
     return c.json({
       configured: true,
       provider: cfg.provider ?? null,
@@ -312,7 +313,7 @@ app.openapi(setupFedaPay, async (c) => {
   }
 
   const db = getDb(c.var.db);
-  const configValue = JSON.stringify({ secret_key, webhook_secret, sandbox });
+  const configValue = await sealConfig('fedapay', JSON.stringify({ secret_key, webhook_secret, sandbox }));
 
   await db.run(
     `INSERT INTO config (key, value, updated_at) VALUES ('fedapay', ?, ?)
@@ -361,7 +362,7 @@ app.openapi(getFedaPayStatus, async (c) => {
   }
 
   try {
-    const cfg = JSON.parse(row.value);
+    const cfg = await parseConfig('fedapay', row.value);
     return c.json({
       configured: true,
       sandbox: cfg.sandbox ?? false,

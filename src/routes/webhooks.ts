@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { parseConfig } from '../lib/config-secrets';
 import Stripe from 'stripe';
 import { getDb } from '../db';
 import { ApiError, uuid, now, generateOrderNumber, type HonoEnv } from '../types';
@@ -30,7 +31,7 @@ webhooks.post('/stripe', async (c) => {
     throw ApiError.invalidRequest('Stripe not configured');
   }
 
-  const stripeConfig = JSON.parse(config.value);
+  const stripeConfig = await parseConfig('stripe', config.value);
   if (!stripeConfig.webhook_secret) {
     throw ApiError.invalidRequest('Stripe webhook secret not configured');
   }
@@ -169,7 +170,7 @@ webhooks.post('/fedapay', async (c) => {
   const [config] = await db.query<any>(`SELECT * FROM config WHERE key = 'fedapay'`);
   if (!config?.value) throw ApiError.invalidRequest('FedaPay not configured');
 
-  const fedaPayConfig = JSON.parse(config.value);
+  const fedaPayConfig = await parseConfig('fedapay', config.value);
   if (!fedaPayConfig.webhook_secret) throw ApiError.invalidRequest('FedaPay webhook secret not configured');
 
   try {
@@ -219,26 +220,29 @@ webhooks.post('/fedapay', async (c) => {
       const storeBaseUrl = (c.env as any).STORE_URL
         ?? (c.env.IMAGES_URL ? new URL(c.env.IMAGES_URL).origin : 'https://yourstore.com');
 
-      c.executionCtx.waitUntil(
-        (async () => {
-          try {
-            const status = await verifyFedaPayTransaction(txId!, fedaPayConfig);
-            if (status !== 'approved') {
-              console.warn(`[fedapay] API verify: tx ${txId} not approved, aborting`);
-              return;
-            }
-          } catch (err) {
-            console.warn(`[fedapay] API verify failed for tx ${txId} (proceeding):`, err);
-          }
+      // Fail closed: an order is only created once FedaPay itself confirms the
+      // transaction is approved. If that check cannot be completed we answer 503 and
+      // do NOT record the event, so FedaPay retries the webhook later.
+      let confirmed: 'approved' | 'other';
+      try {
+        confirmed = await verifyFedaPayTransaction(txId!, fedaPayConfig);
+      } catch (err) {
+        console.error(`[fedapay] could not confirm tx ${txId} with FedaPay, asking for a retry:`, err);
+        return c.json({ error: { code: 'verification_unavailable', message: 'Could not confirm the transaction, retry later' } }, 503);
+      }
 
-          await settleCharge(getDb(dbBinding), dbBinding, c.executionCtx, cartId!, 'fedapay', String(txId), {
+      if (confirmed !== 'approved') {
+        console.warn(`[fedapay] API verify: tx ${txId} not approved, ignoring event`);
+      } else {
+        c.executionCtx.waitUntil(
+          settleCharge(getDb(dbBinding), dbBinding, c.executionCtx, cartId!, 'fedapay', String(txId), {
             provider:    'fedapay',
             providerRef: String(txId),
             storeBaseUrl,
             storeName:   c.env.STORE_NAME ?? 'Your Store',
-          });
-        })().catch(err => console.error('[fedapay] order creation error:', err))
-      );
+          }).catch(err => console.error('[fedapay] order creation error:', err))
+        );
+      }
     } else {
       console.warn(`[fedapay] transaction.approved — could not resolve cart for tx_id: ${txId}`);
     }
