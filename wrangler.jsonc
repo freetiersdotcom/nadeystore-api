@@ -29,7 +29,9 @@
 	"STORE_NAME": "Santé Natur'",
 	"STORE_URL": "https://nadeystore.freetiers-com.workers.dev",
 	"IMAGES_URL": "nadeystore-api",
-	"COD_COUNTRIES": "BJ"
+	"COD_COUNTRIES": "BJ",
+	"ADMIN_ORIGINS": "",
+  "ADMIN_URL": "https://nadeystore-admin.freetiers-com.workers.dev"
   },
 
   "triggers": {
