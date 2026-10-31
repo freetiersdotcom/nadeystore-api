@@ -1,6 +1,8 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './routes/auth';
+import { accountRoutes } from './routes/account';
+import { purgeAccountData } from './account/service';
 import { purgeAuthData } from './auth/service';
 import { setConfigKey } from './lib/config-secrets';
 import { swaggerUI } from '@hono/swagger-ui';
@@ -74,6 +76,7 @@ app.get('/', (c) => c.json({ name: 'merchant', version: '0.1.0', ok: true }));
 
 app.route('/v1/setup', setup);
 app.route('/v1/auth', authRoutes);
+app.route('/v1/account', accountRoutes);
 app.route('/v1/products', catalog);
 app.route('/v1/inventory', inventory);
 app.route('/v1/carts', checkout);
@@ -146,6 +149,7 @@ export default {
     }
     try {
       await purgeAuthData(getDb(stub as unknown as DOStub));
+      await purgeAccountData(getDb(stub as unknown as DOStub));
     } catch (err) {
       console.error('Cron: auth cleanup failed', err);
     }

@@ -21,6 +21,8 @@ export type Env = {
   ADMIN_URL?: string;
   /** Secret mixed into password hashes and sign-in codes. Set with `wrangler secret put PASSWORD_PEPPER`; do not change once users have passwords. */
   PASSWORD_PEPPER?: string;
+  /** Storefront origins allowed to use customer cookie sessions, comma-separated. Defaults to the origin of STORE_URL. */
+  STORE_ORIGINS?: string;
   /** Encrypts Stripe / FedaPay / email provider keys stored in the database. Set with `wrangler secret put CONFIG_ENCRYPTION_KEY` (32+ random characters). */
   CONFIG_ENCRYPTION_KEY?: string;
 

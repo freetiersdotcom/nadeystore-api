@@ -31,7 +31,9 @@
 	"IMAGES_URL": "nadeystore-api",
 	"COD_COUNTRIES": "BJ",
 	"ADMIN_ORIGINS": "https://nadeystore-admin.freetiers-com.workers.dev",
-  "ADMIN_URL": "https://nadeystore-admin.freetiers-com.workers.dev"
+  "ADMIN_URL": "https://nadeystore-admin.freetiers-com.workers.dev",
+  "STORE_ORIGINS":"https://nadeystore.freetiers-com.workers.dev",
+  "CONTACT_NOTIFY_EMAIL":""
   },
 
   "triggers": {

@@ -17,6 +17,8 @@ export default defineConfig({
           ADMIN_ORIGINS: 'https://admin.test.com,http://localhost:5173',
           ADMIN_URL: 'https://admin.test.com',
           PASSWORD_PEPPER: 'test-pepper',
+          STORE_URL: 'https://store.test.com',
+          STORE_ORIGINS: 'https://www.store.test.com',
           CONFIG_ENCRYPTION_KEY: 'test-config-encryption-key-0123456789',
         },
       },

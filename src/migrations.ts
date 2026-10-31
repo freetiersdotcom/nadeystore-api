@@ -255,3 +255,34 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at)
 `;
+
+// Storefront customer accounts: sign-in tokens and sessions, kept apart from the admin's
+// (a customer session can never be read as an admin one). Each statement runs on its own.
+export const ACCOUNT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS customer_login_tokens (
+  id          TEXT PRIMARY KEY,
+  email       TEXT NOT NULL,
+  token_hash  TEXT NOT NULL UNIQUE,
+  code_hash   TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  expires_at  TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_login_tokens_email ON customer_login_tokens(email, created_at);
+
+CREATE TABLE IF NOT EXISTS customer_sessions (
+  id           TEXT PRIMARY KEY,
+  customer_id  TEXT NOT NULL REFERENCES customers(id),
+  token_hash   TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  idle_seconds INTEGER NOT NULL,
+  ip           TEXT,
+  user_agent   TEXT,
+  via          TEXT NOT NULL DEFAULT 'bearer',
+  revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer ON customer_sessions(customer_id)
+`;
