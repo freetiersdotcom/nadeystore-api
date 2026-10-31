@@ -12,10 +12,11 @@
   "dependencies": {
     "@hono/swagger-ui": "^0.5.3",
     "@hono/zod-openapi": "^0.18.3",
+    "@noble/hashes": "^2.4.0",
+    "@simplewebauthn/server": "^14.0.3",
     "hono": "^4.6.0",
     "libphonenumber-js": "^1.13.15",
-    "stripe": "^17.0.0",
-    "@noble/hashes": "^2.4.0"
+    "stripe": "^17.0.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.0",

@@ -33,7 +33,8 @@
 	"ADMIN_ORIGINS": "https://nadeystore-admin.freetiers-com.workers.dev",
   "ADMIN_URL": "https://nadeystore-admin.freetiers-com.workers.dev",
   "STORE_ORIGINS":"https://nadeystore.freetiers-com.workers.dev",
-  "CONTACT_NOTIFY_EMAIL":""
+  "CONTACT_NOTIFY_EMAIL":"",
+  "PASSKEY_RP_ID":""
   },
 
   "triggers": {

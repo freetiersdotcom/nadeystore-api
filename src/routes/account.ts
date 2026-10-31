@@ -74,7 +74,7 @@ const storeName = (c: any) => (c.env.STORE_NAME as string | undefined) ?? 'Your 
 // ---------------------------------------------------------------------------
 // Customer authentication
 // ---------------------------------------------------------------------------
-const customerAuth = createMiddleware<AcctEnv>(async (c, next) => {
+export const customerAuth = createMiddleware<AcctEnv>(async (c, next) => {
   const header = c.req.header('Authorization');
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : null;
   const cookie = bearer === null ? readCustomerCookie(c) : undefined;

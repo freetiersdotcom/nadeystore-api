@@ -19,6 +19,7 @@ export default defineConfig({
           PASSWORD_PEPPER: 'test-pepper',
           STORE_URL: 'https://store.test.com',
           STORE_ORIGINS: 'https://www.store.test.com',
+          PASSKEY_RP_ID: 'test.com',
           CONFIG_ENCRYPTION_KEY: 'test-config-encryption-key-0123456789',
         },
       },

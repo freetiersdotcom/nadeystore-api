@@ -2,6 +2,8 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './routes/auth';
 import { accountRoutes } from './routes/account';
+import { adminPasskeyRoutes, customerPasskeyRoutes } from './routes/passkeys';
+import { purgePasskeyData } from './auth/passkeys';
 import { purgeAccountData } from './account/service';
 import { purgeAuthData } from './auth/service';
 import { setConfigKey } from './lib/config-secrets';
@@ -75,7 +77,10 @@ app.onError((err, c) => {
 app.get('/', (c) => c.json({ name: 'merchant', version: '0.1.0', ok: true }));
 
 app.route('/v1/setup', setup);
+// Passkey routes first: they are more specific than the two areas they live under.
+app.route('/v1/auth/passkeys', adminPasskeyRoutes);
 app.route('/v1/auth', authRoutes);
+app.route('/v1/account/passkeys', customerPasskeyRoutes);
 app.route('/v1/account', accountRoutes);
 app.route('/v1/products', catalog);
 app.route('/v1/inventory', inventory);
@@ -150,6 +155,7 @@ export default {
     try {
       await purgeAuthData(getDb(stub as unknown as DOStub));
       await purgeAccountData(getDb(stub as unknown as DOStub));
+      await purgePasskeyData(getDb(stub as unknown as DOStub));
     } catch (err) {
       console.error('Cron: auth cleanup failed', err);
     }

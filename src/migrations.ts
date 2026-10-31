@@ -286,3 +286,32 @@ CREATE TABLE IF NOT EXISTS customer_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer ON customer_sessions(customer_id)
 `;
+// Passkeys (WebAuthn): public keys only, for admin users and storefront customers.
+export const PASSKEY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS passkey_credentials (
+  id TEXT PRIMARY KEY,                -- the credential id (base64url)
+  realm TEXT NOT NULL,                -- 'admin' | 'customer'
+  subject_id TEXT NOT NULL,           -- users.id or customers.id
+  public_key TEXT NOT NULL,           -- base64url COSE public key
+  counter INTEGER NOT NULL DEFAULT 0,
+  transports TEXT,
+  device_type TEXT,
+  backed_up INTEGER NOT NULL DEFAULT 0,
+  name TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_passkeys_subject ON passkey_credentials(realm, subject_id);
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  id TEXT PRIMARY KEY,
+  realm TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  subject_id TEXT,
+  challenge TEXT NOT NULL,
+  rp_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_exp ON webauthn_challenges(expires_at);
+`;

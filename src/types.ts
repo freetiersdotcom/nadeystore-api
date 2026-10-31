@@ -23,6 +23,8 @@ export type Env = {
   PASSWORD_PEPPER?: string;
   /** Storefront origins allowed to use customer cookie sessions, comma-separated. Defaults to the origin of STORE_URL. */
   STORE_ORIGINS?: string;
+  /** Domain passkeys are bound to, e.g. santenatur.com (shared by www/admin/api). Defaults to the site's own host. */
+  PASSKEY_RP_ID?: string;
   /** Encrypts Stripe / FedaPay / email provider keys stored in the database. Set with `wrangler secret put CONFIG_ENCRYPTION_KEY` (32+ random characters). */
   CONFIG_ENCRYPTION_KEY?: string;
 
