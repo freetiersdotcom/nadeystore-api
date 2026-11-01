@@ -315,3 +315,17 @@ CREATE TABLE IF NOT EXISTS webauthn_challenges (
 );
 CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_exp ON webauthn_challenges(expires_at);
 `;
+export const PRIVACY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS customer_codes (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,              -- 'email_change' | 'delete'
+  new_email TEXT,                     -- email_change: the address being proven
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_codes_customer ON customer_codes(customer_id, purpose)
+`;

@@ -213,6 +213,7 @@ export async function revokeCustomerSessions(db: Database, customerId: string): 
 export async function purgeAccountData(db: Database): Promise<void> {
   const nowMs = Date.now();
   await db.run(`DELETE FROM customer_login_tokens WHERE expires_at < ?`, [iso(nowMs - 86_400_000)]);
+  await db.run(`DELETE FROM customer_codes WHERE expires_at < ?`, [iso(nowMs - 86_400_000)]).catch(() => {});
   await db.run(
     `DELETE FROM customer_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)`,
     [iso(nowMs - 7 * 86_400_000), iso(nowMs - 7 * 86_400_000)]

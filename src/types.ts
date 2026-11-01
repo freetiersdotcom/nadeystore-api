@@ -25,6 +25,8 @@ export type Env = {
   STORE_ORIGINS?: string;
   /** Domain passkeys are bound to, e.g. santenatur.com (shared by www/admin/api). Defaults to the site's own host. */
   PASSKEY_RP_ID?: string;
+  /** What erasing an account does to past orders: 'keep' (default; contact details stay for accounting, detached from the account) or 'scrub' (name, email, phone, address blanked). */
+  ERASURE_ORDER_PII?: string;
   /** Encrypts Stripe / FedaPay / email provider keys stored in the database. Set with `wrangler secret put CONFIG_ENCRYPTION_KEY` (32+ random characters). */
   CONFIG_ENCRYPTION_KEY?: string;
 
