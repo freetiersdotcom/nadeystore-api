@@ -471,6 +471,8 @@ export const CustomerResponse = z.object({
   name: z.string().nullable(),
   phone: z.string().nullable(),
   has_account: z.boolean(),
+  erased: z.boolean().openapi({ description: 'True once the customer erased their account; contact details are gone, order records are retained.' }),
+  erased_at: z.string().nullable(),
   accepts_marketing: z.boolean(),
   stats: z.object({
     order_count: z.number().int(),
@@ -506,6 +508,7 @@ export const CustomerListResponse = z.object({
 
 export const CustomerQuery = PaginationQuery.extend({
   search: z.string().optional().openapi({ param: { name: 'search', in: 'query' } }),
+  erased: z.enum(['hide', 'only', 'all']).optional().openapi({ param: { name: 'erased', in: 'query' }, description: "Erased accounts: hidden by default; 'only' lists just those, 'all' mixes them in." }),
 });
 
 export const UpdateCustomerBody = z.object({

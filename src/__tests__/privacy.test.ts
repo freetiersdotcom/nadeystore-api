@@ -367,3 +367,56 @@ describe('erasing the account', () => {
     expect((await customerOf(me.id)).email).toBe('ann@shop.test');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('what the admin sees of erased customers', () => {
+  const SETUP = { 'X-Setup-Token': 'test-setup-token' };
+  async function adminToken() {
+    const d = db();
+    for (const t of ['sessions', 'login_tokens', 'identities', 'users']) await d.run(`DELETE FROM ${t}`);
+    await d.run(`DELETE FROM config WHERE key = 'auth'`);
+    const r = await SELF.fetch('http://localhost/v1/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Setup-Token': SETUP['X-Setup-Token'], 'CF-Connecting-IP': nextIp() }, body: JSON.stringify({ email: 'owner@shop.test', role: 'owner' }) });
+    const boot: any = await r.json();
+    const v = await call('/v1/auth/verify', 'POST', { body: { token: boot.token, mode: 'bearer' } });
+    return v.json.session_token as string;
+  }
+  async function twoCustomers() {
+    const keep = await person('bob@shop.test');
+    const gone = await person('ann@shop.test');
+    await db().run(`UPDATE customers SET name = 'Ann Martin' WHERE id = ?`, [gone.id]);
+    await seedOrder({ email: 'ann@shop.test', customerId: gone.id, number: 'ANN-1', status: 'delivered' });
+    await eraseCustomer(db(), (await openCustomer(db(), 'ann@shop.test', 'en')), 'keep');
+    return { keep, gone };
+  }
+
+  it('hides erased accounts from the normal list, and lists them on request', async () => {
+    const admin = await adminToken(); const { keep, gone } = await twoCustomers();
+    const def = await call('/v1/customers', 'GET', { token: admin });
+    expect(def.json.items.map((c: any) => c.id)).toEqual([keep.id]);
+    expect(def.json.items[0].erased).toBe(false);
+    const only = await call('/v1/customers?erased=only', 'GET', { token: admin });
+    expect(only.json.items.map((c: any) => c.id)).toEqual([gone.id]);
+    expect(only.json.items[0]).toMatchObject({ erased: true, name: null, phone: null });
+    expect(only.json.items[0].erased_at).toBeTruthy();
+    const all = await call('/v1/customers?erased=all', 'GET', { token: admin });
+    expect(all.json.items).toHaveLength(2);
+  });
+
+  it('an erased account cannot be edited or given addresses, but its retained orders can still be read', async () => {
+    const admin = await adminToken(); const { gone } = await twoCustomers();
+    const patch = await call(`/v1/customers/${gone.id}`, 'PATCH', { token: admin, body: { name: 'Someone' } });
+    expect(patch.status).toBe(409);
+    const addr = await call(`/v1/customers/${gone.id}/addresses`, 'POST', { token: admin, body: { line1: 'x', city: 'Paris', country: 'FR', postal_code: '75001' } });
+    expect(addr.status).toBe(409);
+    const detail = await call(`/v1/customers/${gone.id}`, 'GET', { token: admin });
+    expect(detail.json.erased).toBe(true);
+    const orders = await call(`/v1/customers/${gone.id}/orders`, 'GET', { token: admin });
+    expect(orders.status).toBe(200);
+    expect(orders.json.items.map((o: any) => o.number)).toEqual(['ANN-1']);
+  });
+
+  it('a normal customer is still editable', async () => {
+    const admin = await adminToken(); const { keep } = await twoCustomers();
+    expect((await call(`/v1/customers/${keep.id}`, 'PATCH', { token: admin, body: { name: 'Bob' } })).status).toBe(200);
+  });
+});

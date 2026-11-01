@@ -22,6 +22,13 @@ import {
 
 const CustomerOrdersQuery = PaginationQuery;
 
+/** An erased account keeps its row (orders reference it) under this reserved, undeliverable domain. */
+export const ERASED_DOMAIN = '@erased.invalid';
+const isErased = (email: string | null | undefined) => !!email && email.toLowerCase().endsWith(ERASED_DOMAIN);
+function assertEditable(email: string) {
+  if (isErased(email)) throw ApiError.conflict('This account was erased at the customer\'s request and can no longer be edited.');
+}
+
 const CustomerOrderResponse = z.object({
   id: z.string().uuid(),
   number: z.string(),
@@ -80,11 +87,15 @@ const listCustomers = createRoute({
 
 app.openapi(listCustomers, async (c) => {
   const db = getDb(c.var.db);
-  const { limit: limitStr, cursor, search } = c.req.valid('query');
+  const { limit: limitStr, cursor, search, erased } = c.req.valid('query');
   const limit = Math.min(parseInt(limitStr || '50'), 100);
 
   let query = `SELECT * FROM customers WHERE 1=1`;
   const params: any[] = [];
+
+  // Erased accounts are hidden unless asked for: 'only' (the retained-records view) or 'all'.
+  if (erased === 'only') query += ` AND email LIKE '%${ERASED_DOMAIN}'`;
+  else if (erased !== 'all') query += ` AND email NOT LIKE '%${ERASED_DOMAIN}'`;
 
   if (search) {
     query += ` AND (email LIKE ? OR name LIKE ?)`;
@@ -242,6 +253,7 @@ app.openapi(updateCustomer, async (c) => {
 
   const [customer] = await db.query<any>(`SELECT * FROM customers WHERE id = ?`, [id]);
   if (!customer) throw ApiError.notFound('Customer');
+  assertEditable(customer.email);
 
   const updates: string[] = [];
   const params: any[] = [];
@@ -305,8 +317,9 @@ app.openapi(createAddress, async (c) => {
   const { id } = c.req.valid('param');
   const body = c.req.valid('json');
 
-  const [customer] = await db.query<any>(`SELECT id FROM customers WHERE id = ?`, [id]);
+  const [customer] = await db.query<any>(`SELECT id, email FROM customers WHERE id = ?`, [id]);
   if (!customer) throw ApiError.notFound('Customer');
+  assertEditable(customer.email);
 
   // Same rules as checkout: known country, postal code where the country needs one, phone in E.164 (optional here).
   const contact = resolveContact(body, { phoneRequired: false });
@@ -365,8 +378,9 @@ app.openapi(deleteAddress, async (c) => {
   const db = getDb(c.var.db);
   const { id, addressId } = c.req.valid('param');
 
-  const [customer] = await db.query<any>(`SELECT id FROM customers WHERE id = ?`, [id]);
+  const [customer] = await db.query<any>(`SELECT id, email FROM customers WHERE id = ?`, [id]);
   if (!customer) throw ApiError.notFound('Customer');
+  assertEditable(customer.email);
 
   const [address] = await db.query<any>(
     `SELECT * FROM customer_addresses WHERE id = ? AND customer_id = ?`,
@@ -394,6 +408,8 @@ function formatCustomer(c: any) {
     name: c.name,
     phone: c.phone,
     has_account: !!c.password_hash,
+    erased: isErased(c.email),
+    erased_at: isErased(c.email) ? parseErasedAt(c.metadata) : null,
     accepts_marketing: !!c.accepts_marketing,
     stats: {
       order_count: c.order_count || 0,
@@ -404,6 +420,10 @@ function formatCustomer(c: any) {
     created_at: c.created_at,
     updated_at: c.updated_at,
   };
+}
+
+function parseErasedAt(metadata: string | null): string | null {
+  try { return metadata ? (JSON.parse(metadata).erased_at ?? null) : null; } catch { return null; }
 }
 
 function formatAddress(a: any) {
