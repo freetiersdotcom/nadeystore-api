@@ -449,7 +449,8 @@ app.openapi(checkoutCart, async (c) => {
         shipping_address_collection: {
           allowed_countries: shipping_countries as any,
         },
-        shipping_options: shipping_options ?? defaultShippingOptions,
+        // A priced delivery line is already in the cart: offering a free "Standard Shipping" choice next to it would be misleading.
+        ...((shipping_options || prepared.shipping_cents === 0) && { shipping_options: shipping_options ?? defaultShippingOptions }),
       }),
       line_items: lineItems,
       ...(stripeCouponId && { discounts: [{ coupon: stripeCouponId }] }),

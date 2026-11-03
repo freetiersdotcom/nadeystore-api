@@ -347,6 +347,8 @@ export const OrderResponse = z.object({
   service_note: z.string().nullable().optional(),
   customer_email: z.string().email(),
   customer_id: z.string().uuid().nullable(),
+  delivery_option: z.string().nullable().openapi({ description: 'Name of the delivery option chosen (as shown to the customer), when there was one.' }),
+  walk_in: z.boolean().openapi({ description: 'Counter sale recorded without a customer email.' }),
   shipping: z.object({
     name: z.string().nullable(),
     phone: z.string().nullable(),
@@ -473,6 +475,7 @@ export const CustomerResponse = z.object({
   has_account: z.boolean(),
   erased: z.boolean().openapi({ description: 'True once the customer erased their account; contact details are gone, order records are retained.' }),
   erased_at: z.string().nullable(),
+  walk_in: z.boolean().openapi({ description: 'The shared customer that counter sales without an email are recorded on.' }),
   accepts_marketing: z.boolean(),
   stats: z.object({
     order_count: z.number().int(),

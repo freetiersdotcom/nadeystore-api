@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import { isWalkIn } from '../lib/walk-in';
 import { z } from '@hono/zod-openapi';
 import Stripe from 'stripe';
 import { getDb } from '../db';
@@ -768,6 +769,8 @@ function formatOrder(order: any, items: any[], variantTypes?: Map<string, Produc
     service_note: order.service_note ?? null,
     customer_email: order.customer_email,
     customer_id: order.customer_id || null,
+    delivery_option: (order.shipping_label ?? null) as string | null,
+    walk_in: isWalkIn(order.customer_email),
     shipping: {
       name: order.shipping_name || null,
       phone: order.shipping_phone || null,

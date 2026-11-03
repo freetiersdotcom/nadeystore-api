@@ -67,6 +67,16 @@ export async function createEmailProvider(config: EmailConfig): Promise<EmailPro
 import type { Database } from '../../db';
 import { parseConfig } from '../config-secrets';
 
+/** Never send to an undeliverable address (walk-in sales, erased accounts): drop it quietly instead of bouncing. */
+function skipUndeliverable(inner: EmailProvider): EmailProvider {
+  return {
+    async send(message) {
+      if (message.to.trim().toLowerCase().endsWith('.invalid')) return {};
+      return inner.send(message);
+    },
+  };
+}
+
 export async function getEmailProvider(db: Database): Promise<EmailProvider | null> {
   const [row] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'email' LIMIT 1`);
   if (!row) return null;
@@ -78,5 +88,5 @@ export async function getEmailProvider(db: Database): Promise<EmailProvider | nu
     return null;
   }
 
-  return createEmailProvider(cfg);
+  return skipUndeliverable(await createEmailProvider(cfg));
 }

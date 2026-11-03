@@ -22,6 +22,7 @@
 // Nothing in this file needs changing.
 // =============================================================================
 
+import { isUndeliverable } from './walk-in';
 import type { Database } from '../db';
 import type { DOStub } from '../types';
 import { uuid, now, generateOrderNumber } from '../types';
@@ -171,7 +172,7 @@ export async function createOrderFromCart(
   }
 
   // ── Save shipping address if present ─────────────────────────────────────
-  if (shippingAddress && customerId) {
+  if (shippingAddress && customerId && !isUndeliverable(customerEmail)) {
     const [existingAddr] = await db.query<any>(
       `SELECT id FROM customer_addresses
        WHERE customer_id = ? AND line1 = ? AND postal_code = ? LIMIT 1`,

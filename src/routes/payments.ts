@@ -7,6 +7,8 @@ import { createOrderFromCart } from '../lib/orders';
 import { recordPayment, paymentState, MANUAL_PAYMENT_METHODS } from '../lib/payments';
 import { ErrorResponse } from '../schemas';
 import { resolveContact } from '../lib/geo';
+import { quoteShipping } from '../lib/shipping';
+import { WALK_IN_EMAIL } from '../lib/walk-in';
 
 // =============================================================================
 // Payments on an order + orders entered by hand
@@ -200,8 +202,14 @@ payments.openapi(voidPayment, async (c) => {
 });
 
 // ── POST /manual: order entered by the merchant ─────────────────────────────
+const ManualShipping = z.object({
+  rate_id: z.string().optional().openapi({ description: 'One of the delivery options returned by POST /v1/orders/manual/quote (needs an address).' }),
+  custom_cents: z.number().int().nonnegative().optional().openapi({ description: 'A delivery price agreed by hand (courier arranged by phone, for example).' }),
+  label: z.string().max(120).optional().openapi({ description: 'Name shown on the order for a custom price, e.g. "Courier (arranged)".' }),
+}).refine((v) => (v.rate_id ? 1 : 0) + (v.custom_cents !== undefined ? 1 : 0) === 1, { message: 'Give either rate_id or custom_cents.' });
+
 const ManualOrderBody = z.object({
-  customer_email: z.string().email(),
+  customer_email: z.string().email().optional().openapi({ description: 'Leave out for a walk-in sale: it is recorded on a shared "walk-in" customer and nothing is emailed.' }),
   customer_name: z.string().max(200).optional(),
   address: z.object({
     line1: z.string().min(1),
@@ -219,6 +227,7 @@ const ManualOrderBody = z.object({
     qty: z.number().int().positive(),
     unit_price_cents: z.number().int().nonnegative().optional().openapi({ description: 'Override the catalog price (negotiated price).' }),
   })).min(1),
+  shipping: ManualShipping.optional(),
   payment: z.object({
     amount_cents: z.number().int().positive(),
     method: PaymentMethodEnum,
@@ -236,6 +245,32 @@ const ManualOrderResponse = z.object({
   balance_cents: z.number().int(),
   payment_status: z.enum(['unpaid', 'partial', 'paid']),
 }).openapi('ManualOrderResult');
+
+const ManualQuoteBody = z.object({
+  items: z.array(z.object({ sku: z.string().min(1), qty: z.number().int().positive(), unit_price_cents: z.number().int().nonnegative().optional() })).min(1),
+  currency: z.string().length(3).toUpperCase().default('XOF'),
+  address: z.object({ country: z.string().length(2), city: z.string().optional(), state: z.string().optional() }),
+}).openapi('ManualQuoteRequest');
+
+payments.openapi(createRoute({
+  method: 'post', path: '/manual/quote', tags: ['Orders'],
+  summary: 'Delivery options for a manual order',
+  description: 'The same options and prices customers see at checkout, for a destination and a cart you are building by hand. Works even while delivery is switched off for the storefront.',
+  security: [{ bearerAuth: [] }], middleware: [adminOnly] as const,
+  request: { body: { content: { 'application/json': { schema: ManualQuoteBody } } } },
+  responses: { 200: { content: { 'application/json': { schema: z.any() } }, description: 'Quote' } },
+}), async (c) => {
+  const b = c.req.valid('json'); const db = getDb(c.var.db);
+  const priced = await Promise.all(b.items.map(async (it) => {
+    const [v] = await db.query<{ price_cents: number }>(`SELECT price_cents FROM variants WHERE sku = ? LIMIT 1`, [it.sku]);
+    return (it.unit_price_cents ?? Number(v?.price_cents ?? 0)) * it.qty;
+  }));
+  const q = await quoteShipping(db, {
+    items: b.items.map((i) => ({ sku: i.sku, qty: i.qty })), goods_cents: priced.reduce((a, x) => a + x, 0), currency: b.currency,
+    country: b.address.country, city: b.address.city, state: b.address.state, force: true,
+  });
+  return c.json(q, 200);
+});
 
 const createManual = createRoute({
   method: 'post',
@@ -279,7 +314,26 @@ payments.openapi(createManual, async (c) => {
     if ((inv?.on_hand ?? 0) - (inv?.reserved ?? 0) < qty) throw ApiError.insufficientInventory(sku);
   }
 
-  const total = lines.reduce((s, l) => s + l.price * l.qty, 0);
+  const goods = lines.reduce((s, l) => s + l.price * l.qty, 0);
+  const customerEmail = body.customer_email?.trim() || WALK_IN_EMAIL;
+
+  // Delivery: nothing by default (counter sales), a stored delivery option, or a price agreed by hand.
+  let shippingCents = 0; let shippingLabel: string | null = null; let shippingRateId: string | null = null;
+  if (body.shipping?.rate_id) {
+    if (!body.address) throw ApiError.invalidRequest('A delivery address is needed to price a delivery option.');
+    const q = await quoteShipping(db, {
+      items: body.items.map((i) => ({ sku: i.sku, qty: i.qty })), goods_cents: goods, currency: body.currency,
+      country: body.address.country, city: body.address.city, state: body.address.state ?? undefined, force: true,
+    });
+    const opt = q.deliverable ? q.options.find((o) => o.id === body.shipping!.rate_id) : undefined;
+    if (!opt) throw ApiError.invalidRequest('That delivery option does not apply to this address and cart.');
+    shippingCents = opt.cents; shippingRateId = opt.id;
+    shippingLabel = (body.locale === 'en' ? opt.name_en : opt.name_fr) || opt.name_fr || opt.name_en;
+  } else if (body.shipping?.custom_cents !== undefined) {
+    shippingCents = body.shipping.custom_cents;
+    shippingLabel = body.shipping.label?.trim() || (body.locale === 'en' ? 'Delivery' : 'Livraison');
+  }
+  const total = goods + shippingCents;
   if (body.payment && body.payment.amount_cents > total) {
     throw ApiError.invalidRequest(`Payment exceeds the order total (${total}).`);
   }
@@ -291,11 +345,12 @@ payments.openapi(createManual, async (c) => {
   // Counter and phone orders: a phone is welcome but not compulsory, postal rules still apply.
   const contact = body.address ? resolveContact(body.address, { phoneRequired: false }) : null;
   await db.run(
-    `INSERT INTO carts (id, status, customer_email, currency, ship_to, shipping_name, locale, expires_at)
-     VALUES (?, 'checked_out', ?, ?, ?, ?, ?, ?)`,
-    [cartId, body.customer_email, body.currency,
+    `INSERT INTO carts (id, status, customer_email, currency, ship_to, shipping_name, locale, expires_at, shipping_cents, shipping_label, shipping_rate_id)
+     VALUES (?, 'checked_out', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [cartId, customerEmail, body.currency,
      body.address ? JSON.stringify({ line1, line2: line2 ?? null, city, state: state ?? null, postal_code: contact!.postal_code, phone: contact!.phone, country: contact!.country }) : null,
-     body.customer_name ?? null, body.locale, new Date(Date.now() + 3600_000).toISOString()]
+     body.customer_name ?? null, body.locale, new Date(Date.now() + 3600_000).toISOString(),
+     shippingCents, shippingLabel, shippingRateId]
   );
   for (const l of lines) {
     await db.run(

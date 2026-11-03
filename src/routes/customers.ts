@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
 import { getDb } from '../db';
 import { ApiError, now, type HonoEnv } from '../types';
+import { isWalkIn } from '../lib/walk-in';
 import { normalizePhone, resolveContact } from '../lib/geo';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import {
@@ -26,6 +27,7 @@ const CustomerOrdersQuery = PaginationQuery;
 export const ERASED_DOMAIN = '@erased.invalid';
 const isErased = (email: string | null | undefined) => !!email && email.toLowerCase().endsWith(ERASED_DOMAIN);
 function assertEditable(email: string) {
+  if (isWalkIn(email)) throw ApiError.conflict('This is the shared walk-in customer for counter sales; it has no contact details to edit.');
   if (isErased(email)) throw ApiError.conflict('This account was erased at the customer\'s request and can no longer be edited.');
 }
 
@@ -409,6 +411,7 @@ function formatCustomer(c: any) {
     phone: c.phone,
     has_account: !!c.password_hash,
     erased: isErased(c.email),
+    walk_in: isWalkIn(c.email),
     erased_at: isErased(c.email) ? parseErasedAt(c.metadata) : null,
     accepts_marketing: !!c.accepts_marketing,
     stats: {
