@@ -33,6 +33,7 @@ import { downloads } from './routes/downloads';
 import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
 import { backupRoutes } from './routes/backup';
+import { importApp, exportApp } from './routes/bulk';
 import { runBackup } from './lib/backup';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
@@ -116,6 +117,8 @@ app.route('/v1/catalog/products', assetRoutes);
 
 app.route('/v1/submissions', submissions);
 app.route('/v1/backup', backupRoutes);
+app.route('/v1/import', importApp);
+app.route('/v1/export', exportApp);
 
 app.doc('/openapi.json', {
   openapi: '3.0.0',

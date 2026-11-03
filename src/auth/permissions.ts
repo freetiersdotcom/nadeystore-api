@@ -113,6 +113,11 @@ const RULES: Rule[] = [
   { match: /^\/v1\/webhooks(\/|$)/, permission: 'webhooks.manage' },
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
+  // CSV import / export
+  { match: /^\/v1\/import\/products(\/|$)/, permission: 'products.write' },
+  { match: /^\/v1\/export\/products\.csv$/, permission: 'products.read' },
+  { match: /^\/v1\/export\/orders\.csv$/, permission: 'orders.read' },
+  { match: /^\/v1\/export\/customers\.csv$/, permission: 'customers.read' },
 ];
 
 /** Permission a request needs, or null when the route is not in the map. */
