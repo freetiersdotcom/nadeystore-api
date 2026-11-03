@@ -113,6 +113,7 @@ const RULES: Rule[] = [
   { match: /^\/v1\/webhooks(\/|$)/, permission: 'webhooks.manage' },
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
+  { match: /^\/v1\/modules(\/|$)/, permission: 'settings.manage' },
   // CSV import / export
   { match: /^\/v1\/import\/products(\/|$)/, permission: 'products.write' },
   { match: /^\/v1\/export\/products\.csv$/, permission: 'products.read' },
@@ -132,8 +133,21 @@ export function requiredPermission(method: string, path: string): Permission | n
   return null;
 }
 
+// Optional modules declare what managers and staff may do in them (see modules/registry.ts).
+const MODULE_ACCESS = new Map<string, { manager?: 'read' | 'write'; staff?: 'read' | 'write' }>();
+export function registerModuleAccess(id: string, access: { manager?: 'read' | 'write'; staff?: 'read' | 'write' }) { MODULE_ACCESS.set(id, access); }
+
 /** Can `role` perform this request? Unlisted routes are for owner/agency only. */
 export function roleCanRequest(role: Role, method: string, path: string): { ok: boolean; needed: Permission | null } {
+  // Module routes: /v1/m/<id>/… follow the module's own access table.
+  const mod = /^\/v1\/m\/([a-z][a-z0-9-]*)(\/|$)/.exec(path);
+  if (mod) {
+    if (isSuperRole(role)) return { ok: true, needed: null };
+    const level = MODULE_ACCESS.get(mod[1])?.[role as 'manager' | 'staff'];
+    return { ok: level === 'write' || (level === 'read' && SAFE.has(method.toUpperCase())), needed: null };
+  }
+  // The module list is read by everyone signed in (the menu needs it); switching modules is a setting.
+  if (method.toUpperCase() === 'GET' && /^\/v1\/modules\/?$/.test(path)) return { ok: true, needed: null };
   const needed = requiredPermission(method, path);
   if (!needed) return { ok: isSuperRole(role), needed };
   return { ok: roleCan(role, needed), needed };

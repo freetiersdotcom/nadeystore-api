@@ -34,6 +34,9 @@ import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
 import { backupRoutes } from './routes/backup';
 import { importApp, exportApp } from './routes/bulk';
+import { moduleAdmin } from './routes/modules';
+import { authMiddleware } from './middleware/auth';
+import { MODULES, ensureInstalled, isEnabled, getModule } from './modules/registry';
 import { runBackup } from './lib/backup';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
@@ -117,6 +120,29 @@ app.route('/v1/catalog/products', assetRoutes);
 
 app.route('/v1/submissions', submissions);
 app.route('/v1/backup', backupRoutes);
+// Optional modules (see modules/MODULES.md). Admin routes live at /v1/m/<id>, public pages at /m/<id>.
+app.route('/v1/modules', moduleAdmin);
+app.use('/v1/m/*', authMiddleware);
+app.use('/v1/m/*', async (c, next) => {
+  if ((c as any).get('auth').role !== 'admin') throw ApiError.forbidden('Admin access required'); // not a public key, not an OAuth token
+  await next();
+});
+const moduleGate = async (c: any, next: any) => {
+  const id = /^\/(?:v1\/)?m\/([a-z][a-z0-9-]*)(\/|$)/.exec(c.req.path)?.[1];
+  const mod = id ? getModule(id) : undefined;
+  const db = getDb(c.var.db as DOStub);
+  if (!mod || !(await isEnabled(db, mod.id))) return c.json({ error: { code: 'not_found', message: 'This module is not enabled.' } }, 404);
+  await ensureInstalled(db, mod);
+  await next();
+};
+app.use('/v1/m/*', moduleGate);
+app.use('/m/*', rateLimitMiddleware());
+app.use('/m/*', moduleGate);
+for (const m of MODULES) {
+  if (m.routes) app.route(`/v1/m/${m.id}`, m.routes);
+  if (m.publicRoutes) app.route(`/m/${m.id}`, m.publicRoutes);
+}
+
 app.route('/v1/import', importApp);
 app.route('/v1/export', exportApp);
 
