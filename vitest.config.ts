@@ -9,7 +9,7 @@ export default defineConfig({
         durableObjects: {
 		MERCHANT: {className: 'MerchantDO', useSQLite: true },
         },
-        r2Buckets: ['IMAGES'],
+        r2Buckets: ['IMAGES', 'BACKUPS'],
         bindings: {
           STORE_NAME: 'Test Store',
           IMAGES_URL: 'https://assets.teststore.com',

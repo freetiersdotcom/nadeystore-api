@@ -112,6 +112,7 @@ const RULES: Rule[] = [
 
   { match: /^\/v1\/webhooks(\/|$)/, permission: 'webhooks.manage' },
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
+  { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
 ];
 
 /** Permission a request needs, or null when the route is not in the map. */

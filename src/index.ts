@@ -32,6 +32,8 @@ import { ucp } from './routes/ucp';
 import { downloads } from './routes/downloads';
 import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
+import { backupRoutes } from './routes/backup';
+import { runBackup } from './lib/backup';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
 import { MerchantDO } from './do';
@@ -113,6 +115,7 @@ app.route('/v1/downloads', downloads);
 app.route('/v1/catalog/products', assetRoutes);
 
 app.route('/v1/submissions', submissions);
+app.route('/v1/backup', backupRoutes);
 
 app.doc('/openapi.json', {
   openapi: '3.0.0',
@@ -160,6 +163,16 @@ export default {
       await purgePasskeyData(getDb(stub as unknown as DOStub));
     } catch (err) {
       console.error('Cron: auth cleanup failed', err);
+    }
+    // Daily backup to the private BACKUPS bucket, in the 02:00 UTC run.
+    const at = new Date(event.scheduledTime);
+    if (at.getUTCHours() === 2 && at.getUTCMinutes() < 15) {
+      try {
+        const b = await runBackup(env, getDb(stub as unknown as DOStub));
+        if (b) console.log(`Cron: backup ${b.key} (${b.rows} rows, ${b.bytes} bytes)`);
+      } catch (err) {
+        console.error('Cron: backup failed', err);
+      }
     }
     const staleCheckouts = await typedStub.cleanupStaleCheckedOutCarts();
     console.log(`Cron: released ${staleCheckouts} stale checked-out carts`);

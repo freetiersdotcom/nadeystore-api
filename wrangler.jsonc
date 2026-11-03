@@ -22,6 +22,10 @@
   "r2_buckets": [
     {
       "binding": "IMAGES"
+    },
+    {
+      // Private bucket for the daily database backups. Never give it a public URL.
+      "binding": "BACKUPS"
     }
   ],
 
@@ -44,6 +48,9 @@
   "dev": {
     "port": 8787
   },
+
+  // Keep the Worker logs (errors from console.error) in the Cloudflare dashboard.
+  "observability": { "enabled": true },
 
   "upload_source_maps": true
 }

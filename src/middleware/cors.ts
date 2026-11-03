@@ -50,7 +50,7 @@ export function corsMiddleware() {
     }
 
     if (trusted || !authPath) {
-      c.header('Access-Control-Expose-Headers', 'Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset');
+      c.header('Access-Control-Expose-Headers', 'Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Content-Disposition');
     }
     await next();
   };

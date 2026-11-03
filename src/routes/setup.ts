@@ -6,6 +6,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, now, type HonoEnv } from '../types';
 import { SetupStripeBody, OkResponse, ErrorResponse } from '../schemas';
 import { createEmailProvider, type EmailProviderName } from '../lib/email/index';
+import { gunzipIfNeeded, isFreshDatabase, restoreBackup } from '../lib/backup';
 
 
 const app = new OpenAPIHono<HonoEnv>();
@@ -65,6 +66,28 @@ app.openapi(initKeys, async (c) => {
   }
 
   return c.json({ ok: true as const }, 200);
+});
+
+// ============================================================
+// RESTORE (disaster recovery into an empty deployment)
+// ============================================================
+// POST /v1/setup/restore   body: the backup file (gzip or plain NDJSON)
+// Needs the X-Setup-Token, and only works while the database holds no shop data
+// (no users, API keys, orders, products or customers). Nothing is ever merged into a live shop.
+app.post('/restore', async (c) => {
+  if (!c.env.SETUP_TOKEN) throw ApiError.invalidRequest('SETUP_TOKEN is not configured.');
+  if (c.req.header('X-Setup-Token') !== c.env.SETUP_TOKEN) throw ApiError.unauthorized('Missing or invalid X-Setup-Token header');
+  const db = getDb(c.var.db);
+  if (!(await isFreshDatabase(db))) throw ApiError.conflict('This deployment already holds data. A restore only works on an empty one.');
+  let text: string;
+  try { text = await gunzipIfNeeded(await c.req.arrayBuffer()); }
+  catch { throw ApiError.invalidRequest('The file could not be read.'); }
+  try {
+    const r = await restoreBackup(db, text);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    throw ApiError.invalidRequest(e instanceof Error ? e.message : 'Restore failed');
+  }
 });
 
 // ============================================================

@@ -4,6 +4,10 @@ export type Env = {
   MERCHANT: DurableObjectNamespace<MerchantDO>;
   IMAGES?: R2Bucket;
   IMAGES_URL?: string;
+  /** Private R2 bucket for daily database backups (never served publicly). Optional. */
+  BACKUPS?: R2Bucket;
+  /** How many daily backups to keep (default 14, minimum 3). */
+  BACKUP_KEEP?: string;
   STORE_NAME?: string;
   STORE_URL?: string;
   STRIPE_SECRET_KEY?: string;
