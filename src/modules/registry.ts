@@ -2,9 +2,10 @@ import type { Database } from '../db';
 import type { ModuleDef } from './types';
 import { registerModuleAccess } from '../auth/permissions';
 import { quotes } from './quotes';
+import { affiliates } from './affiliates';
 
 /** Every module that exists in this build. Add yours here. */
-export const MODULES: ModuleDef[] = [quotes];
+export const MODULES: ModuleDef[] = [quotes, affiliates];
 for (const m of MODULES) registerModuleAccess(m.id, m.access);
 
 export const getModule = (id: string) => MODULES.find((m) => m.id === id);
