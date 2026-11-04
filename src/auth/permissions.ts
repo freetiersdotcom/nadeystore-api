@@ -146,6 +146,8 @@ export function roleCanRequest(role: Role, method: string, path: string): { ok: 
     const level = MODULE_ACCESS.get(mod[1])?.[role as 'manager' | 'staff'];
     return { ok: level === 'write' || (level === 'read' && SAFE.has(method.toUpperCase())), needed: null };
   }
+  // Notifications belong to the signed-in person, whatever their role (the route refuses API keys).
+  if (/^\/v1\/push(\/|$)/.test(path)) return { ok: true, needed: null };
   // The module list is read by everyone signed in (the menu needs it); switching modules is a setting.
   if (method.toUpperCase() === 'GET' && /^\/v1\/modules\/?$/.test(path)) return { ok: true, needed: null };
   const needed = requiredPermission(method, path);

@@ -34,6 +34,7 @@ import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
 import { backupRoutes } from './routes/backup';
 import { importApp, exportApp } from './routes/bulk';
+import { pushApp } from './routes/push';
 import { moduleAdmin } from './routes/modules';
 import { authMiddleware } from './middleware/auth';
 import { MODULES, ensureInstalled, isEnabled, getModule } from './modules/registry';
@@ -122,6 +123,8 @@ app.route('/v1/submissions', submissions);
 app.route('/v1/backup', backupRoutes);
 // Optional modules (see modules/MODULES.md). Admin routes live at /v1/m/<id>, public pages at /m/<id>.
 app.route('/v1/modules', moduleAdmin);
+app.use('/v1/push/*', authMiddleware);
+app.route('/v1/push', pushApp);
 app.use('/v1/m/*', authMiddleware);
 app.use('/v1/m/*', async (c, next) => {
   if ((c as any).get('auth').role !== 'admin') throw ApiError.forbidden('Admin access required'); // not a public key, not an OAuth token

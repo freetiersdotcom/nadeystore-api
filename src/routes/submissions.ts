@@ -11,6 +11,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
 import { getEmailProvider } from '../lib/email/index';
 import { verifyTurnstile } from '../lib/turnstile';
+import { notifyAdmins } from '../lib/push';
 
 const app = new OpenAPIHono<HonoEnv>();
 app.use('*', authMiddleware);
@@ -163,6 +164,8 @@ app.openapi(createSubmission, async (c) => {
 
   // 5. Optional email notification — never blocks or fails the request.
   c.executionCtx.waitUntil(notify(c.env, db, { id, ...body }).catch((e) => console.error('[submissions] notify failed', e)));
+
+  notifyAdmins(c.var.db, c.executionCtx, { kind: 'message', form: body.form });
 
   return c.json({ ok: true as const }, 201);
 });

@@ -22,6 +22,7 @@
 // Nothing in this file needs changing.
 // =============================================================================
 
+import { notifyAdmins } from './push';
 import { isUndeliverable } from './walk-in';
 import type { Database } from '../db';
 import type { DOStub } from '../types';
@@ -481,6 +482,9 @@ export async function createOrderFromCart(
       })),
     },
   });
+
+  // A phone that installed the admin app buzzes (order number and total only).
+  notifyAdmins(doStub, ctx, { kind: 'order', number: orderNumber, total_cents: totalCents, currency, cod: isCod, needs_review: needsReview });
 
   console.log(
     `[${ctx_order.provider}] Order ${orderNumber} created ` +
