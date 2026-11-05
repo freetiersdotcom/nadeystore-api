@@ -32,7 +32,11 @@ export type ModuleDef = {
    * Treat it as a nudge, not as the source of truth: it must be idempotent and must work out for itself
    * which orders it still has to deal with (so a missed call is harmless). Errors are swallowed.
    */
-  hooks?: { orderPaid?: (db: Database) => Promise<void> };
+  hooks?: {
+    orderPaid?: (db: Database) => Promise<void>;
+    /** Called by the 15-minute cron, before carts are cleaned up. Errors are swallowed. */
+    scheduled?: (db: Database, ctx: { storeBaseUrl: string; storeName: string }) => Promise<void>;
+  };
   /** Public routes, mounted at /m/<id>. No sign-in: the module must protect what it serves. */
   publicRoutes?: Hono<HonoEnv>;
 };

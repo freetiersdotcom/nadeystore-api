@@ -4,9 +4,10 @@ import { registerModuleAccess } from '../auth/permissions';
 import { quotes } from './quotes';
 import { affiliates } from './affiliates';
 import { vouchers } from './vouchers';
+import { recovery } from './recovery';
 
 /** Every module that exists in this build. Add yours here. */
-export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers];
+export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers, recovery];
 for (const m of MODULES) registerModuleAccess(m.id, m.access);
 
 export const getModule = (id: string) => MODULES.find((m) => m.id === id);
@@ -57,4 +58,15 @@ export async function setEnabled(db: Database, m: ModuleDef, enabled: boolean): 
   if (enabled) { on.add(m.id); await ensureInstalled(db, m, s); } else on.delete(m.id);
   s.enabled = [...on].sort();
   await writeState(db, s);
+}
+
+/** The 15-minute cron: lets enabled modules do their periodic work (runs before expired carts are cleaned up). Never throws. */
+export async function runScheduledHooks(db: Database, ctx: { storeBaseUrl: string; storeName: string }): Promise<void> {
+  try {
+    const s = await readState(db);
+    for (const id of s.enabled) {
+      const m = getModule(id); if (!m?.hooks?.scheduled) continue;
+      try { await ensureInstalled(db, m, s); await m.hooks.scheduled(db, ctx); } catch (e) { console.error(`[modules] ${id} scheduled hook failed`, e); }
+    }
+  } catch (e) { console.error('[modules] scheduled hooks failed', e); }
 }

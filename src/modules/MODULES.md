@@ -15,6 +15,7 @@ no tables, no routes (404) and no menu entry.
    - `routes`: Hono app, mounted at `/v1/m/<id>` (admin session or admin API key only).
    - `publicRoutes` (optional): mounted at `/m/<id>`, no login, rate-limited. Escape everything you render.
    - `hooks.orderPaid(db)` (optional): called after an order becomes fully paid (online, cash, manual). Must be idempotent and cheap; failures are logged and never block the payment.
+   - `hooks.scheduled(db, ctx)` (optional): called by the 15-minute cron, before expired carts are cleaned up, with `{ storeBaseUrl, storeName }`. Idempotent; errors are logged.
 2. Add it to `MODULES` in `src/modules/registry.ts`.
 3. Write tests (see `src/__tests__/modules.test.ts`).
 

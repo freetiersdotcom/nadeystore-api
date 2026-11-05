@@ -37,7 +37,7 @@ import { importApp, exportApp } from './routes/bulk';
 import { pushApp } from './routes/push';
 import { moduleAdmin } from './routes/modules';
 import { authMiddleware } from './middleware/auth';
-import { MODULES, ensureInstalled, isEnabled, getModule } from './modules/registry';
+import { MODULES, ensureInstalled, isEnabled, getModule, runScheduledHooks } from './modules/registry';
 import { runBackup } from './lib/backup';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { ApiError, type Env, type DOStub } from './types';
@@ -171,6 +171,8 @@ export default {
       cleanupExpiredCarts: () => Promise<number>;
       cleanupStaleCheckedOutCarts: () => Promise<number>;
     };
+    // Optional modules first: abandoned-cart recovery must copy cart contents before they are cleaned up.
+    await runScheduledHooks(getDb(stub as unknown as DOStub), { storeBaseUrl: storeBase(env as any), storeName: (env as any).STORE_NAME ?? 'Your Store' });
     const cleaned = await typedStub.cleanupExpiredCarts();
     console.log(`Cron: cleaned ${cleaned} expired carts`);
     try {
