@@ -3,9 +3,10 @@ import type { ModuleDef } from './types';
 import { registerModuleAccess } from '../auth/permissions';
 import { quotes } from './quotes';
 import { affiliates } from './affiliates';
+import { vouchers } from './vouchers';
 
 /** Every module that exists in this build. Add yours here. */
-export const MODULES: ModuleDef[] = [quotes, affiliates];
+export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers];
 for (const m of MODULES) registerModuleAccess(m.id, m.access);
 
 export const getModule = (id: string) => MODULES.find((m) => m.id === id);
@@ -31,6 +32,18 @@ export async function ensureInstalled(db: Database, m: ModuleDef, state?: State)
   for (const sql of m.migrate) await db.run(sql);
   s.versions[m.id] = m.version;
   await writeState(db, s);
+}
+
+/** Tell the enabled modules that an order was just created or paid. Never throws, never blocks a payment for long. */
+export async function runOrderPaidHooks(db: Database): Promise<void> {
+  try {
+    const s = await readState(db);
+    for (const id of s.enabled) {
+      const m = getModule(id);
+      if (!m?.hooks?.orderPaid) continue;
+      try { await ensureInstalled(db, m, s); await m.hooks.orderPaid(db); } catch (e) { console.error(`[modules] ${id} orderPaid hook failed`, e); }
+    }
+  } catch (e) { console.error('[modules] hooks failed', e); }
 }
 
 export async function isEnabled(db: Database, id: string): Promise<boolean> {

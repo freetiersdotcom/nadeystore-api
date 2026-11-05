@@ -1,3 +1,4 @@
+import { runOrderPaidHooks } from '../modules/registry';
 import type { Database } from '../db';
 import { uuid, now } from '../types';
 
@@ -51,6 +52,9 @@ export async function recordPayment(db: Database, order: any, input: RecordPayme
   }
   params.push(order.id);
   await db.run(`UPDATE orders SET ${sets.join(', ')} WHERE id = ?`, params);
+
+  // Optional modules (e.g. vouchers) may have something to deliver for a fully paid order.
+  if (complete) await runOrderPaidHooks(db);
 
   return { id, amount_paid_cents: newPaid, complete };
 }

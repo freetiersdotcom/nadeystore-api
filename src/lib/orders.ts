@@ -22,6 +22,7 @@
 // Nothing in this file needs changing.
 // =============================================================================
 
+import { runOrderPaidHooks } from '../modules/registry';
 import { notifyAdmins } from './push';
 import { isUndeliverable } from './walk-in';
 import type { Database } from '../db';
@@ -482,6 +483,9 @@ export async function createOrderFromCart(
       })),
     },
   });
+
+  // Optional modules (e.g. vouchers) deliver what a paid order contains.
+  await runOrderPaidHooks(db);
 
   // A phone that installed the admin app buzzes (order number and total only).
   notifyAdmins(doStub, ctx, { kind: 'order', number: orderNumber, total_cents: totalCents, currency, cod: isCod, needs_review: needsReview });

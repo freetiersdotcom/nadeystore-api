@@ -10,6 +10,7 @@
 
 import type { Hono } from 'hono';
 import type { HonoEnv } from '../types';
+import type { Database } from '../db';
 
 export type AccessLevel = 'read' | 'write';
 
@@ -26,6 +27,12 @@ export type ModuleDef = {
   access: { manager?: AccessLevel; staff?: AccessLevel };
   /** Admin routes, mounted at /v1/m/<id>. Signed-in admin only (the framework checks it and the role). */
   routes?: Hono<HonoEnv>;
+  /**
+   * Called (only while the module is on) whenever an order has just been fully paid or created.
+   * Treat it as a nudge, not as the source of truth: it must be idempotent and must work out for itself
+   * which orders it still has to deal with (so a missed call is harmless). Errors are swallowed.
+   */
+  hooks?: { orderPaid?: (db: Database) => Promise<void> };
   /** Public routes, mounted at /m/<id>. No sign-in: the module must protect what it serves. */
   publicRoutes?: Hono<HonoEnv>;
 };
