@@ -33,6 +33,7 @@ export const PERMISSIONS = [
   'settings.manage',
   'users.manage',
   'audit.read',
+  'costs.manage',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -45,6 +46,7 @@ const MANAGER: Permission[] = [
   'shipping.read', 'shipping.write',
   'appointments.read', 'appointments.write',
   'messages.read', 'messages.write',
+  'costs.manage',
 ];
 
 const STAFF: Permission[] = [
@@ -114,6 +116,8 @@ const RULES: Rule[] = [
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/launch(\/|$)/, permission: 'settings.manage' },
+  // Cost prices and profit: owner and manager only (staff never see what the shop pays)
+  { match: /^\/v1\/(profit|costs)(\/|$)/, permission: 'costs.manage' },
   { match: /^\/v1\/modules(\/|$)/, permission: 'settings.manage' },
   // CSV import / export
   { match: /^\/v1\/import\/products(\/|$)/, permission: 'products.write' },

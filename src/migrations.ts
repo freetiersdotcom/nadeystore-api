@@ -108,6 +108,8 @@ ALTER TABLE refunds ADD COLUMN source TEXT NOT NULL DEFAULT 'stripe';
 ALTER TABLE refunds ADD COLUMN method TEXT;
 ALTER TABLE refunds ADD COLUMN reference TEXT;
 ALTER TABLE refunds ADD COLUMN note TEXT;
+ALTER TABLE variants ADD COLUMN cost_cents INTEGER;
+ALTER TABLE order_items ADD COLUMN cost_cents INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
 ALTER TABLE products ADD COLUMN deposit_type TEXT;
 ALTER TABLE products ADD COLUMN deposit_value INTEGER;

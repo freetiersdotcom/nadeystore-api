@@ -278,9 +278,9 @@ export async function createOrderFromCart(
 
   for (const item of items) {
     await db.run(
-      `INSERT INTO order_items (id, order_id, sku, title, qty, unit_price_cents)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [uuid(), orderId, item.sku, item.title, item.qty, item.unit_price_cents]
+      `INSERT INTO order_items (id, order_id, sku, title, qty, unit_price_cents, cost_cents)
+       VALUES (?, ?, ?, ?, ?, ?, (SELECT cost_cents FROM variants WHERE sku = ?))`,
+      [uuid(), orderId, item.sku, item.title, item.qty, item.unit_price_cents, item.sku]
     );
 
     // Digital downloads and services have no stock: nothing was reserved at
