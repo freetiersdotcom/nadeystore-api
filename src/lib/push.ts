@@ -121,7 +121,8 @@ const money = (cents: number, currency: string, lang: 'fr' | 'en') => {
 
 export type PushEvent =
   | { kind: 'order'; number: string; total_cents: number; currency: string; cod: boolean; needs_review?: boolean }
-  | { kind: 'message'; form?: string };
+  | { kind: 'message'; form?: string }
+  | { kind: 'stock'; count: number; first: string };
 
 function messageFor(e: PushEvent, lang: 'fr' | 'en'): PushMessage {
   if (e.kind === 'order') {
@@ -129,24 +130,30 @@ function messageFor(e: PushEvent, lang: 'fr' | 'en'): PushMessage {
     const title = lang === 'en' ? (e.cod ? 'New order (payment pending)' : 'New paid order') : (e.cod ? 'Nouvelle commande (paiement à venir)' : 'Nouvelle commande payée');
     return { title, body: `${e.number} · ${total}${e.needs_review ? (lang === 'en' ? ' · to review' : ' · à vérifier') : ''}`, url: '/#orders', tag: `order-${e.number}` };
   }
+  if (e.kind === 'stock') {
+    const more = e.count > 1 ? (lang === 'en' ? ` and ${e.count - 1} more` : ` et ${e.count - 1} autre(s)`) : '';
+    return { title: lang === 'en' ? 'Low stock' : 'Stock bas', body: `${e.first}${more}`, url: '/#inventory', tag: 'stock' };
+  }
   return { title: lang === 'en' ? 'New message' : 'Nouveau message', body: lang === 'en' ? 'Someone wrote to you through the shop.' : 'Quelqu’un vous a écrit depuis la boutique.', url: '/#messages', tag: 'message' };
+}
+
+/** Send a notification to every subscribed person who may see this kind of thing (awaitable: for cron jobs). */
+export async function pushAdmins(db: Database, e: PushEvent): Promise<void> {
+  await ensurePushTables(db);
+  const subs = await db.query<Sub & { role: string }>(
+    `SELECT s.*, u.role FROM push_subscriptions s JOIN users u ON u.id = s.user_id WHERE u.status = 'active'`
+  );
+  const need: Permission = e.kind === 'order' ? 'orders.read' : e.kind === 'stock' ? 'inventory.read' : 'messages.read';
+  const targets = subs.filter((s) => isRole(s.role) && roleCan(s.role, need));
+  if (!targets.length) return;
+  const v = await getVapid(db);
+  const [sj] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'push_subject'`); const subject = sj?.value || 'mailto:admin@example.com';
+  await Promise.allSettled(targets.map((s) => sendPush(db, v, subject, s, messageFor(e, s.locale === 'en' ? 'en' : 'fr'))));
 }
 
 /** Tell every subscribed person who may see this kind of thing. Never throws and never delays the caller (runs after the response). */
 export function notifyAdmins(stub: DOStub, ctx: ExecutionContext, e: PushEvent): void {
-  const work = (async () => {
-    const db = getDb(stub);
-    await ensurePushTables(db);
-    const subs = await db.query<Sub & { role: string }>(
-      `SELECT s.*, u.role FROM push_subscriptions s JOIN users u ON u.id = s.user_id WHERE u.status = 'active'`
-    );
-    const need: Permission = e.kind === 'order' ? 'orders.read' : 'messages.read';
-    const targets = subs.filter((s) => isRole(s.role) && roleCan(s.role, need));
-    if (!targets.length) return;
-    const v = await getVapid(db);
-    const [sj] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'push_subject'`); const subject = sj?.value || 'mailto:admin@example.com';
-    await Promise.allSettled(targets.map((s) => sendPush(db, v, subject, s, messageFor(e, s.locale === 'en' ? 'en' : 'fr'))));
-  })().catch((err) => console.error('[push] failed', err));
+  const work = pushAdmins(getDb(stub), e).catch((err) => console.error('[push] failed', err));
   try { ctx.waitUntil(work); } catch { /* no execution context (tests calling directly) */ }
 }
 

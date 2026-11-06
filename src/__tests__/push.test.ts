@@ -192,6 +192,15 @@ describe('push: who is told about what', () => {
     expect(JSON.stringify([fr, en])).not.toMatch(/@|address|email/i);
   });
 
+  it('a low-stock alert reaches everyone who may see inventory, in their language', async () => {
+    const o = await signIn('owner@shop.test'); const d = await device(); await subscribe(o.token, d, 'en');
+    const { ctx, done } = fakeCtx();
+    notifyAdmins(stub(), ctx, { kind: 'stock', count: 3, first: 'Savon (2)' });
+    await done();
+    const msg = await decrypt(d, bodyOf(to(d)[0]));
+    expect(msg.title).toBe('Low stock'); expect(msg.body).toBe('Savon (2) and 2 more'); expect(msg.url).toBe('/#inventory');
+  });
+
   it('an order awaiting payment (pay on delivery) says so', async () => {
     const o = await signIn('owner@shop.test'); const d = await device(); await subscribe(o.token, d, 'en');
     const { ctx, done } = fakeCtx();
