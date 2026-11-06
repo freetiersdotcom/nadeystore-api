@@ -113,6 +113,7 @@ const RULES: Rule[] = [
   { match: /^\/v1\/webhooks(\/|$)/, permission: 'webhooks.manage' },
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
+  { match: /^\/v1\/launch(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/modules(\/|$)/, permission: 'settings.manage' },
   // CSV import / export
   { match: /^\/v1\/import\/products(\/|$)/, permission: 'products.write' },
