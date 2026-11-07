@@ -155,3 +155,33 @@ describe('profit report', () => {
     const d = await report(); expect(d.currencies.map((c: any) => c.currency).sort()).toEqual(['EUR', 'XOF']);
   });
 });
+
+describe('profit on one order', () => {
+  const oid = async () => (await db().query<any>(`SELECT id FROM orders ORDER BY created_at DESC`))[0].id as string;
+  it('shows revenue, cost, fees and margin for a single order, and agrees with the report', async () => {
+    await setCost(a, 6000); await setCost(b, 3000);
+    await sale([{ sku: a, qty: 2 }, { sku: b, qty: 1 }], 'mobile_money');
+    await call('/v1/profit/fees', { method: 'PUT', json: { fees: { mobile_money: 2 } } });
+    const o = await j(await call(`/v1/profit/order/${await oid()}`));
+    expect(o).toMatchObject({ currency: 'XOF', revenue_cents: 25000, cost_cents: 15000, fees_cents: 500, margin_cents: 9500, margin_pct: 38, complete: true });
+    expect(o.lines).toHaveLength(2);
+    expect(xof(await report()).margin_cents).toBe(o.margin_cents);
+  });
+  it('an order with a line without a cost has no margin, but its lines are listed', async () => {
+    await setCost(a, 6000);
+    await sale([{ sku: a, qty: 1 }, { sku: b, qty: 1 }]);
+    const o = await j(await call(`/v1/profit/order/${await oid()}`));
+    expect(o).toMatchObject({ complete: false, margin_cents: null, cost_cents: null, revenue_cents: 15000 });
+    expect(o.lines.find((l: any) => l.sku === b).cost_cents).toBeNull();
+  });
+  it('discounts and refunds are applied, an unknown id is 404, and staff are refused', async () => {
+    await setCost(a, 6000); await sale([{ sku: a, qty: 1 }]); const id = await oid();
+    await db().run(`UPDATE orders SET discount_amount_cents = 1000 WHERE id = ?`, [id]);
+    await db().run(`INSERT INTO refunds (id, order_id, stripe_refund_id, amount_cents, status, source, created_at) VALUES ('r2', ?, 'm2', 2000, 'succeeded', 'manual', ?)`, [id, new Date().toISOString()]);
+    expect(await j(await call(`/v1/profit/order/${id}`))).toMatchObject({ revenue_cents: 7000, refunded_cents: 2000, discount_cents: 1000, margin_cents: 1000 });
+    expect((await call('/v1/profit/order/nope')).status).toBe(404);
+    expect((await call(`/v1/profit/order/${id}`, { key: null })).status).toBe(401);
+    expect(roleCanRequest('staff', 'GET', `/v1/profit/order/${id}`).ok).toBe(false);
+    expect(roleCanRequest('manager', 'GET', `/v1/profit/order/${id}`).ok).toBe(true);
+  });
+});

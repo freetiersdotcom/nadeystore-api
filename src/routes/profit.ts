@@ -118,8 +118,37 @@ profitRoutes.put('/fees', async (c) => {
   return c.json({ fees: b.data.fees });
 });
 
+
+type Line = { sku: string; title: string; qty: number; unit_price_cents: number; cost_cents: number | null };
+/** One order's money, used by the report and by the single-order view so they can never disagree. */
+function figures(lines: Line[], discount: number, refund: number, payments: Record<string, number>, fees: Fees) {
+  const gross = lines.reduce((n, l) => n + l.qty * l.unit_price_cents, 0);
+  const net = Math.max(0, gross - discount - refund);          // what the shop kept of the goods
+  const k = gross > 0 ? net / gross : 0;                       // discount and refunds spread over the lines pro rata
+  const complete = lines.every((l) => l.cost_cents != null);
+  const cost = complete ? lines.reduce((n, l) => n + l.qty * (l.cost_cents as number), 0) : 0;
+  let fee = 0; for (const [m, amt] of Object.entries(payments)) fee += Math.round(amt * (fees[m] ?? 0) / 100);
+  return { gross, net, k, complete, cost, fee, margin: complete ? net - cost - fee : null };
+}
+
 const dateOk = (s: string | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
 const MAX_ORDERS = 5000;
+
+profitRoutes.get('/order/:id', async (c) => {
+  noStore(c);
+  const db = getDb(c.var.db); const id = c.req.param('id');
+  const [o] = await db.query<{ id: string; currency: string; status: string; discount: number; shipping_cents: number }>(
+    `SELECT id, currency, status, COALESCE(discount_amount_cents, 0) AS discount, shipping_cents FROM orders WHERE id = ?`, [id]);
+  if (!o) throw ApiError.notFound('Order not found.');
+  const lines = await db.query<Line>(`SELECT sku, title, qty, unit_price_cents, cost_cents FROM order_items WHERE order_id = ?`, [id]);
+  const [r] = await db.query<{ n: number | null }>(`SELECT SUM(amount_cents) AS n FROM refunds WHERE order_id = ? AND status NOT IN ('failed', 'canceled')`, [id]);
+  const paidBy: Record<string, number> = {};
+  for (const p of await db.query<{ method: string; n: number }>(`SELECT method, SUM(amount_cents) AS n FROM order_payments WHERE order_id = ? GROUP BY method`, [id])) paidBy[p.method] = p.n;
+  const refund = r?.n ?? 0; const f = figures(lines, o.discount, refund, paidBy, await getFees(db));
+  return c.json({ currency: o.currency, revenue_cents: f.net, refunded_cents: refund, discount_cents: o.discount, cost_cents: f.complete ? f.cost : null, fees_cents: f.complete ? f.fee : null,
+    margin_cents: f.margin, margin_pct: f.margin != null && f.net > 0 ? Math.round((f.margin / f.net) * 1000) / 10 : null, complete: f.complete,
+    lines: lines.map((l) => ({ sku: l.sku, title: l.title, qty: l.qty, unit_price_cents: l.unit_price_cents, cost_cents: l.cost_cents })) });
+});
 
 profitRoutes.get('/', async (c) => {
   noStore(c);
@@ -155,12 +184,10 @@ profitRoutes.get('/', async (c) => {
 
   for (const o of orders) {
     const lines = items.get(o.id) ?? []; if (!lines.length) continue;
-    const gross = lines.reduce((n, l) => n + l.qty * l.unit_price_cents, 0);
     const refund = refunded.get(o.id) ?? 0;
-    const net = Math.max(0, gross - o.discount - refund);       // what the shop kept of the goods
-    const k = gross > 0 ? net / gross : 0;                       // discount and refunds spread over the lines pro rata
+    const f = figures(lines, o.discount, refund, paidBy.get(o.id) ?? {}, fees);
+    const { net, k, complete } = f;
     const s = slot(o.currency); s.orders++; s.revenue_cents += net; s.shipping_cents += o.shipping_cents; s.refunded_cents += refund;
-    const complete = lines.every((l) => l.cost_cents != null);
     if (!complete) { s.unknown_orders++; }
     for (const l of lines) {
       if (l.cost_cents == null) continue;
@@ -168,9 +195,7 @@ profitRoutes.get('/', async (c) => {
       p.units += l.qty; p.revenue_cents += Math.round(l.qty * l.unit_price_cents * k); p.cost_cents += l.qty * l.cost_cents; prod.set(key, p);
     }
     if (!complete) continue;                                     // margin only on orders whose every line has a cost
-    const cost = lines.reduce((n, l) => n + l.qty * (l.cost_cents as number), 0);
-    let fee = 0; for (const [m, amt] of Object.entries(paidBy.get(o.id) ?? {})) fee += Math.round(amt * (fees[m] ?? 0) / 100);
-    const margin = net - cost - fee;
+    const cost = f.cost, fee = f.fee, margin = f.margin as number;
     s.known_orders++; s.known_revenue_cents += net; s.cost_cents += cost; s.fees_cents += fee; s.margin_cents += margin;
     const dk = `${o.paid_at.slice(0, 10)}|${o.currency}`; const d = day.get(dk) ?? { day: o.paid_at.slice(0, 10), currency: o.currency, revenue_cents: 0, margin_cents: 0 };
     d.revenue_cents += net; d.margin_cents += margin; day.set(dk, d);
