@@ -3,6 +3,7 @@ import { corsMiddleware } from './middleware/cors';
 import { authRoutes } from './routes/auth';
 import { launchRoutes } from './routes/launch';
 import { profitRoutes, costRoutes } from './routes/profit';
+import { shopRoutes } from './routes/shop';
 import { accountRoutes } from './routes/account';
 import { privacyRoutes } from './routes/privacy';
 import { adminPasskeyRoutes, customerPasskeyRoutes } from './routes/passkeys';
@@ -124,6 +125,7 @@ app.route('/v1/catalog/products', assetRoutes);
 app.route('/v1/submissions', submissions);
 app.route('/v1/backup', backupRoutes);
 app.route('/v1/launch', launchRoutes);
+app.route('/v1/shop-profile', shopRoutes);
 app.route('/v1/profit', profitRoutes);
 app.route('/v1/costs', costRoutes);
 // Optional modules (see modules/MODULES.md). Admin routes live at /v1/m/<id>, public pages at /m/<id>.

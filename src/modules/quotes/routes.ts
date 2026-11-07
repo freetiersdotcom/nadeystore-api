@@ -12,6 +12,8 @@ import { getDb } from '../../db';
 import { ApiError, uuid, now, type HonoEnv } from '../../types';
 import { getEmailProvider } from '../../lib/email/index';
 import { audit } from '../../auth/service';
+import { quotePrintHtml } from './public';
+import { getShopProfile } from '../../routes/shop';
 import { effectiveStatus, formatQuote, money, newToken, publicUrl, resolveItems, totalOf, type QuoteRow } from './lib';
 
 const app = new Hono<HonoEnv>();
@@ -65,6 +67,14 @@ app.post('/', async (c) => {
 });
 
 app.get('/:id', async (c) => c.json(formatQuote(await load(c, c.req.param('id')), origin(c))));
+
+// The quote as a printable page, for the admin to print or save as PDF (works on a draft, which has no public page yet).
+app.get('/:id/print', async (c) => {
+  const q = await load(c, c.req.param('id'));
+  const lang = c.req.query('lang') === 'en' ? 'en' : c.req.query('lang') === 'fr' ? 'fr' : q.locale === 'en' ? 'en' : 'fr';
+  c.header('Cache-Control', 'no-store');
+  return c.json({ html: quotePrintHtml(q, lang, await getShopProfile(getDb(c.var.db), c.env.STORE_NAME)) });
+});
 
 app.patch('/:id', async (c) => {
   const q = await load(c, c.req.param('id'));

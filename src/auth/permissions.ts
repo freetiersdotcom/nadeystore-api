@@ -116,6 +116,9 @@ const RULES: Rule[] = [
   { match: /^\/v1\/setup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/backup(\/|$)/, permission: 'settings.manage' },
   { match: /^\/v1\/launch(\/|$)/, permission: 'settings.manage' },
+  // Shop details printed on receipts and quotes: anyone who reads orders may read them, only settings access may change them
+  { match: /^\/v1\/shop-profile$/, methods: ['PUT'], permission: 'settings.manage' },
+  { match: /^\/v1\/shop-profile$/, permission: 'orders.read' },
   // Cost prices and profit: owner and manager only (staff never see what the shop pays)
   { match: /^\/v1\/(profit|costs)(\/|$)/, permission: 'costs.manage' },
   { match: /^\/v1\/modules(\/|$)/, permission: 'settings.manage' },
