@@ -332,7 +332,15 @@ export async function createOrderFromCart(
   }
 
   // ── Generate download tokens for digital items ────────────────────────────
-  const digitalItems = itemsWithType.filter(i => i.product_type === 'digital');
+  // A digital product with no file attached (a WiFi voucher, for instance) has nothing to download:
+  // it gets no token and no download link.
+  const withFile = new Set(
+    (await db.query<{ sku: string }>(
+      `SELECT sku FROM variants WHERE digital_asset_key IS NOT NULL AND sku IN (${itemsWithType.map(() => '?').join(',') || "''"})`,
+      itemsWithType.map(i => i.sku)
+    )).map(r => r.sku)
+  );
+  const digitalItems = itemsWithType.filter(i => i.product_type === 'digital' && withFile.has(i.sku));
   let downloadTokens: Array<{ plain_token: string; sku: string }> = [];
 
   if (digitalItems.length > 0) {

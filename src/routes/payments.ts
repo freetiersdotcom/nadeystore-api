@@ -296,13 +296,15 @@ payments.openapi(createManual, async (c) => {
   const wanted = new Map<string, number>(); // physical qty per sku, to catch duplicates
   for (const it of body.items) {
     const [v] = await db.query<any>(
-      `SELECT v.sku, v.title, v.price_cents, v.product_type, p.title AS product_title
+      `SELECT v.sku, v.title, v.price_cents, v.product_type, v.digital_asset_key, p.title AS product_title
          FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku = ? LIMIT 1`,
       [it.sku]
     );
     if (!v) throw ApiError.invalidRequest(`Unknown SKU: ${it.sku}`);
     const type = v.product_type ?? 'physical';
-    if (type === 'digital') throw ApiError.invalidRequest(`${it.sku}: digital products cannot be added to a manual order.`);
+    // A download needs somewhere to be sent, so a digital product with a file is refused here. A digital product
+    // with no file (a WiFi voucher, say) has nothing to send, and its code is handed out at the counter.
+    if (type === 'digital' && v.digital_asset_key) throw ApiError.invalidRequest(`${it.sku}: digital products cannot be added to a manual order.`);
     if (type === 'physical') wanted.set(it.sku, (wanted.get(it.sku) ?? 0) + it.qty);
     const title = v.product_title && v.product_title !== v.title ? `${v.product_title} — ${v.title}` : v.title;
     lines.push({ sku: it.sku, title, qty: it.qty, price: it.unit_price_cents ?? Number(v.price_cents), type });
