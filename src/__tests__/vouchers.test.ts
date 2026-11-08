@@ -214,3 +214,16 @@ describe('vouchers: access', () => {
   });
   it('needs a key', async () => { expect((await call('/v1/m/vouchers', { key: null })).status).toBe(401); });
 });
+
+describe('variant currency', () => {
+  it('a new variant inherits the shop currency, ', async () => {
+    const dbh = db();
+    await dbh.run(`DELETE FROM variants WHERE sku LIKE 'CUR-%'`);
+    await dbh.run(`INSERT OR IGNORE INTO products (id, title, status, created_at) VALUES ('3f2b1c1e-0000-4000-8000-00000000c0de', 'Cur', 'active', '2026-01-01')`);
+    await dbh.run(`INSERT INTO variants (id, product_id, sku, title, price_cents, currency, weight_g, product_type, created_at) VALUES ('cur-v0', '3f2b1c1e-0000-4000-8000-00000000c0de', 'CUR-0', 'a', 100, 'XOF', 0, 'physical', '2000-01-01')`);
+    const r = await call('/v1/products/3f2b1c1e-0000-4000-8000-00000000c0de/variants', { json: { sku: 'CUR-1', title: 'b', price_cents: 500, product_type: 'digital' } });
+    expect(r.status).toBe(201);
+    const [v] = await dbh.query<any>(`SELECT currency FROM variants WHERE sku = 'CUR-1'`);
+    expect(v.currency).toBe('XOF');
+  });
+});

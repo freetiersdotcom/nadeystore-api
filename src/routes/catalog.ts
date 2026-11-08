@@ -446,8 +446,11 @@ const createVariant = createRoute({
 
 app.openapi(createVariant, async (c) => {
   const { id: productId } = c.req.valid('param');
-  const { sku, title, price_cents, image_url, product_type, weight_g } = c.req.valid('json');
+  const { sku, title, price_cents, image_url, product_type, weight_g, currency: cur } = c.req.valid('json');
   const db = getDb(c.var.db);
+  // Same currency as the rest of the shop unless told otherwise (the column default is USD).
+  const [firstVar] = await db.query<{ currency: string }>(`SELECT currency FROM variants WHERE sku <> 'CUSTOM' ORDER BY created_at LIMIT 1`);
+  const currency = (cur ?? firstVar?.currency ?? 'USD').toUpperCase();
 
   const [product] = await db.query<any>(`SELECT * FROM products WHERE id = ?`, [productId]);
   if (!product) throw ApiError.notFound('Product not found');
@@ -460,8 +463,8 @@ app.openapi(createVariant, async (c) => {
   // digital_asset_key is intentionally not settable here — it's only ever
   // written by the asset upload/delete endpoints in routes/assets.ts.
   await db.run(
-    `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, image_url, product_type, digital_asset_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, productId, sku, title, price_cents, weight_g, image_url || null, product_type, null, timestamp]
+    `INSERT INTO variants (id, product_id, sku, title, price_cents, currency, weight_g, image_url, product_type, digital_asset_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, productId, sku, title, price_cents, currency, weight_g, image_url || null, product_type, null, timestamp]
   );
 
   await db.run(
@@ -542,6 +545,11 @@ app.openapi(updateVariant, async (c) => {
   if (body.product_type !== undefined) {
     updates.push('product_type = ?');
     params.push(body.product_type);
+  }
+
+  if (body.currency !== undefined) {
+    updates.push('currency = ?');
+    params.push(body.currency.toUpperCase());
   }
 
   if (updates.length > 0) {

@@ -58,6 +58,7 @@ export const CreateVariantBody = z.object({
   price_cents: z.number().int().min(0).openapi({ example: 1499 }),
   image_url: z.string().url().optional().openapi({ example: 'https://example.com/image.jpg' }),
   product_type: ProductType.default('physical'),
+  currency: z.string().length(3).optional().openapi({ example: 'XOF', description: 'ISO currency. Defaults to the currency of the existing variants.' }),
   weight_g: z.number().int().min(0).default(0).openapi({
     example: 0,
     description: 'Weight in grams. Use 0 for digital products.',
@@ -72,6 +73,7 @@ export const UpdateVariantBody = z.object({
   image_url: z.string().url().nullable().optional(),
   weight_g: z.number().int().min(0).optional(),
   product_type: ProductType.optional(),
+  currency: z.string().length(3).optional(),
 }).openapi('UpdateVariant');
 
 // ============================================================
