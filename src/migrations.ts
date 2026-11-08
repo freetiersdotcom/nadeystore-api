@@ -122,6 +122,10 @@ CREATE TABLE IF NOT EXISTS payment_intents (provider TEXT NOT NULL, ref TEXT NOT
 CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(order_id);
 CREATE TABLE IF NOT EXISTS booking_services (product_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, tz TEXT, rules TEXT NOT NULL DEFAULT '[]', lead_hours INTEGER NOT NULL DEFAULT 24, horizon_days INTEGER NOT NULL DEFAULT 60, buffer_min INTEGER NOT NULL DEFAULT 0, step_min INTEGER NOT NULL DEFAULT 30, default_duration_min INTEGER NOT NULL DEFAULT 60, durations TEXT NOT NULL DEFAULT '{}', updated_at TEXT);
 CREATE TABLE IF NOT EXISTS booking_blocks (id TEXT PRIMARY KEY, product_id TEXT, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS booking_resources (id TEXT PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, tz TEXT, rules TEXT NOT NULL DEFAULT '[]', created_at TEXT);
+INSERT INTO booking_resources (id, name, active, position, created_at) SELECT 'default', 'Main', 1, 0, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM booking_resources);
+CREATE TABLE IF NOT EXISTS booking_service_resources (product_id TEXT NOT NULL, resource_id TEXT NOT NULL, PRIMARY KEY (product_id, resource_id));
+ALTER TABLE booking_blocks ADD COLUMN resource_id TEXT;
 CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, resource_id TEXT NOT NULL DEFAULT 'default', product_id TEXT NOT NULL, sku TEXT NOT NULL, title TEXT NOT NULL, cart_id TEXT, order_id TEXT, status TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, customer_tz TEXT, hold_expires_at TEXT, reminder_sent_at TEXT, canceled_at TEXT, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_appointments_time ON appointments(starts_at, status);
 CREATE INDEX IF NOT EXISTS idx_appointments_cart ON appointments(cart_id);

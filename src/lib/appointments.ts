@@ -9,8 +9,10 @@ import { renderApptEmail, type ApptEmailKind } from './email/apptNotice';
 //  - A service product becomes bookable when it has a row in booking_services (weekly hours,
 //    lead time, horizon, buffer, step, and a duration per variant). Services without a row keep
 //    the old behaviour: the order is flagged 'to_schedule' and the merchant calls the customer.
-//  - One shared resource ('default' = the coach): every service competes for the same agenda, so
-//    the same person can never be booked twice. Several coaches later = a resource_id per coach.
+//  - Providers (booking_resources): one 'default' provider exists from the start, so a single coach needs
+//    no setup. Each provider has its own agenda (a person is never booked twice) and optional own weekly
+//    hours; a service can be limited to some providers (none chosen = all active ones). A customer who
+//    does not choose is given the least busy free provider of that day.
 //  - The customer picks a slot in the cart; at checkout the slot is HELD (a few minutes, extended
 //    once payment starts). createOrderFromCart turns the hold into a booking, whatever the payment
 //    provider or method (online, deposit, pay on delivery).
@@ -153,31 +155,70 @@ export async function bookableSku(db: Database, sku: string): Promise<BookableSk
 export const RESOURCE = 'default';
 const iso = (ms: number) => new Date(ms).toISOString();
 
+export interface Provider { id: string; name: string; active: boolean; position: number; tz: string | null; rules: Rule[] }
+
+function toProvider(r: any): Provider {
+  let rules: Rule[] = [];
+  try { rules = cleanRules(JSON.parse(r.rules ?? '[]')); } catch { /* none */ }
+  return { id: r.id, name: r.name, active: !!r.active, position: Number(r.position ?? 0), tz: r.tz ?? null, rules };
+}
+
+export async function listProviders(db: Database): Promise<Provider[]> {
+  const rows = await db.query<any>(`SELECT * FROM booking_resources ORDER BY position, name`);
+  return rows.map(toProvider);
+}
+
+/** Active providers that may perform this service: the ones assigned to it, or all active ones when none is assigned. */
+export async function providersFor(db: Database, productId: string): Promise<Provider[]> {
+  const rows = await db.query<any>(
+    `SELECT r.* FROM booking_resources r WHERE r.active = 1
+       AND (NOT EXISTS (SELECT 1 FROM booking_service_resources s WHERE s.product_id = ?)
+            OR EXISTS (SELECT 1 FROM booking_service_resources s WHERE s.product_id = ? AND s.resource_id = r.id))
+     ORDER BY r.position, r.name`, [productId, productId]);
+  return rows.map(toProvider);
+}
+
+/** Is [startMs, endMs] inside the provider's own weekly hours? No hours set = always on (the service hours still apply). */
+export function withinHours(p: Provider, serviceTz: string, startMs: number, endMs: number): boolean {
+  if (p.rules.length === 0) return true;
+  const w = partsIn(startMs, p.tz || serviceTz);
+  const dow = new Date(Date.UTC(w.year, w.month - 1, w.day)).getUTCDay();
+  const startMin = w.hour * 60 + w.minute, dur = Math.round((endMs - startMs) / 60000);
+  return p.rules.some((r) => r.dow === dow && hm(r.start)! <= startMin && startMin + dur <= hm(r.end)!);
+}
+
 interface Busy { startMs: number; endMs: number }
 
-async function busyRanges(db: Database, productId: string, fromMs: number, toMs: number, bufferMin: number, excludeId?: string): Promise<Busy[]> {
+async function busyByProvider(db: Database, productId: string, ids: string[], fromMs: number, toMs: number, bufferMin: number): Promise<Map<string, Busy[]>> {
+  const out = new Map<string, Busy[]>(ids.map((i) => [i, []]));
+  if (ids.length === 0) return out;
   const lo = iso(fromMs - bufferMin * 60_000 - 86400_000), hi = iso(toMs + bufferMin * 60_000 + 86400_000);
   const nowIso = now();
   const appts = await db.query<any>(
-    `SELECT starts_at, ends_at FROM appointments
-     WHERE resource_id = ? AND (status = 'booked' OR (status = 'held' AND hold_expires_at > ?))
-       AND starts_at < ? AND ends_at > ? ${excludeId ? 'AND id <> ?' : ''}`,
-    excludeId ? [RESOURCE, nowIso, hi, lo, excludeId] : [RESOURCE, nowIso, hi, lo]);
+    `SELECT resource_id, starts_at, ends_at FROM appointments
+     WHERE resource_id IN (${ids.map(() => '?').join(',')}) AND (status = 'booked' OR (status = 'held' AND hold_expires_at > ?))
+       AND starts_at < ? AND ends_at > ?`, [...ids, nowIso, hi, lo]);
   const blocks = await db.query<any>(
-    `SELECT starts_at, ends_at FROM booking_blocks WHERE (product_id IS NULL OR product_id = ?) AND starts_at < ? AND ends_at > ?`,
+    `SELECT resource_id, starts_at, ends_at FROM booking_blocks WHERE (product_id IS NULL OR product_id = ?) AND starts_at < ? AND ends_at > ?`,
     [productId, hi, lo]);
-  return [...appts, ...blocks].map((r) => ({ startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at) }));
+  const span = (r: any): Busy => ({ startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at) });
+  for (const a of appts) out.get(a.resource_id)?.push(span(a));
+  for (const k of blocks) for (const id of ids) if (k.resource_id == null || k.resource_id === id) out.get(id)!.push(span(k));
+  return out;
 }
 
-export async function listSlots(db: Database, b: BookableSku, fromMs: number, days: number, nowMs = Date.now()) {
+export async function listSlots(db: Database, b: BookableSku, fromMs: number, days: number, nowMs = Date.now(), providerId?: string | null) {
   const toMs = fromMs + Math.min(Math.max(days, 1), MAX_RANGE_DAYS) * 86400_000;
   const cands = generateCandidates(b.cfg, b.duration_min, fromMs, toMs, nowMs);
-  const busy = await busyRanges(db, b.product_id, fromMs, toMs, b.cfg.buffer_min);
+  let providers = await providersFor(db, b.product_id);
+  if (providerId && providerId !== 'any') providers = providers.filter((p) => p.id === providerId);
+  const busy = await busyByProvider(db, b.product_id, providers.map((p) => p.id), fromMs, toMs, b.cfg.buffer_min);
   const buf = b.cfg.buffer_min * 60_000;
-  return cands.map((c) => ({
-    start: iso(c.startMs), end: iso(c.endMs),
-    available: !busy.some((x) => x.startMs < c.endMs + buf && x.endMs > c.startMs - buf),
-  }));
+  return cands.map((c) => {
+    const free = providers.filter((p) => withinHours(p, b.cfg.tz, c.startMs, c.endMs)
+      && !busy.get(p.id)!.some((x) => x.startMs < c.endMs + buf && x.endMs > c.startMs - buf)).map((p) => p.id);
+    return { start: iso(c.startMs), end: iso(c.endMs), available: free.length > 0, resource_ids: free };
+  });
 }
 
 // ───────────────────────── holds ─────────────────────────
@@ -187,15 +228,15 @@ const OVERLAP_SQL = `NOT EXISTS (
       AND (a.status = 'booked' OR (a.status = 'held' AND a.hold_expires_at > ?))
       AND a.starts_at < ? AND a.ends_at > ?)
   AND NOT EXISTS (
-    SELECT 1 FROM booking_blocks k WHERE (k.product_id IS NULL OR k.product_id = ?) AND k.starts_at < ? AND k.ends_at > ?)`;
+    SELECT 1 FROM booking_blocks k WHERE (k.product_id IS NULL OR k.product_id = ?) AND (k.resource_id IS NULL OR k.resource_id = ?) AND k.starts_at < ? AND k.ends_at > ?)`;
 
-function overlapParams(id: string, productId: string, startMs: number, endMs: number, bufMin: number) {
+function overlapParams(id: string, productId: string, resourceId: string, startMs: number, endMs: number, bufMin: number) {
   const hi = iso(endMs + bufMin * 60_000), lo = iso(startMs - bufMin * 60_000);
-  return [RESOURCE, id, now(), hi, lo, productId, hi, lo];
+  return [resourceId, id, now(), hi, lo, productId, resourceId, hi, lo];
 }
 
 /** Hold a slot for a cart. Atomic: the overlap check and the insert are one statement. */
-export async function holdSlot(db: Database, cartId: string, sku: string, startIso: string, customerTz?: string | null) {
+export async function holdSlot(db: Database, cartId: string, sku: string, startIso: string, customerTz?: string | null, providerId?: string | null) {
   const b = await bookableSku(db, sku);
   if (!b) throw ApiError.invalidRequest('This service cannot be booked online.');
   const startMs = Date.parse(startIso);
@@ -211,15 +252,36 @@ export async function holdSlot(db: Database, cartId: string, sku: string, startI
   if (!ok) throw ApiError.invalidRequest('This time is not bookable.', { code: 'slot_unavailable' });
   const endMs = startMs + b.duration_min * 60_000;
 
+  let providers = (await providersFor(db, b.product_id)).filter((p) => withinHours(p, b.cfg.tz, startMs, endMs));
+  if (providerId && providerId !== 'any') {
+    providers = providers.filter((p) => p.id === providerId);
+    if (providers.length === 0) throw ApiError.invalidRequest('This provider is not available for this service at this time.', { code: 'slot_unavailable' });
+  }
+  if (providers.length === 0) throw ApiError.invalidRequest('This time is not bookable.', { code: 'slot_unavailable' });
+  // "any available": the provider with the fewest sessions that day goes first (ties: list order)
+  if (providers.length > 1) {
+    const day = iso(Math.floor(startMs / 86400_000) * 86400_000), dayEnd = iso(Math.floor(startMs / 86400_000) * 86400_000 + 86400_000);
+    const load = new Map<string, number>();
+    for (const p of providers) {
+      const [n] = await db.query<any>(
+        `SELECT COUNT(*) AS n FROM appointments WHERE resource_id = ? AND starts_at >= ? AND starts_at < ? AND (status = 'booked' OR (status = 'held' AND hold_expires_at > ?))`,
+        [p.id, day, dayEnd, now()]);
+      load.set(p.id, Number(n?.n ?? 0));
+    }
+    providers.sort((x, y) => (load.get(x.id)! - load.get(y.id)!) || (x.position - y.position));
+  }
+
   await db.run(`UPDATE appointments SET status = 'canceled', canceled_at = ? WHERE cart_id = ? AND sku = ? AND status = 'held'`, [now(), cartId, sku]);
   const id = uuid();
-  const r = await db.run(
-    `INSERT INTO appointments (id, resource_id, product_id, sku, title, cart_id, status, starts_at, ends_at, customer_tz, hold_expires_at, created_at)
-     SELECT ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ? WHERE ${OVERLAP_SQL}`,
-    [id, RESOURCE, b.product_id, sku, b.title, cartId, iso(startMs), iso(endMs), customerTz ?? null,
-     iso(Date.now() + HOLD_MINUTES * 60_000), now(), ...overlapParams(id, b.product_id, startMs, endMs, b.cfg.buffer_min)]);
-  if (r.changes === 0) throw new ApiError('slot_taken', 409, 'This time was just taken. Please choose another.');
-  return { id, start: iso(startMs), end: iso(endMs), hold_expires_at: iso(Date.now() + HOLD_MINUTES * 60_000) };
+  for (const p of providers) {
+    const r = await db.run(
+      `INSERT INTO appointments (id, resource_id, product_id, sku, title, cart_id, status, starts_at, ends_at, customer_tz, hold_expires_at, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ? WHERE ${OVERLAP_SQL}`,
+      [id, p.id, b.product_id, sku, b.title, cartId, iso(startMs), iso(endMs), customerTz ?? null,
+       iso(Date.now() + HOLD_MINUTES * 60_000), now(), ...overlapParams(id, b.product_id, p.id, startMs, endMs, b.cfg.buffer_min)]);
+    if (r.changes > 0) return { id, start: iso(startMs), end: iso(endMs), hold_expires_at: iso(Date.now() + HOLD_MINUTES * 60_000), resource_id: p.id, provider: p.name };
+  }
+  throw new ApiError('slot_taken', 409, 'This time was just taken. Please choose another.');
 }
 
 export async function releaseHold(db: Database, cartId: string, sku?: string) {
@@ -261,7 +323,7 @@ export async function confirmBookings(db: Database, cartId: string, orderId: str
       `UPDATE appointments SET status = 'booked', order_id = ?, hold_expires_at = NULL
        WHERE id = ? AND status = 'held'
          AND (hold_expires_at > ? OR (${OVERLAP_SQL}))`,
-      [orderId, a.id, now(), ...overlapParams(a.id, a.product_id, Date.parse(a.starts_at), Date.parse(a.ends_at), buf)]);
+      [orderId, a.id, now(), ...overlapParams(a.id, a.product_id, a.resource_id, Date.parse(a.starts_at), Date.parse(a.ends_at), buf)]);
     const view: BookedAppt = { id: a.id, title: a.title, sku: a.sku, starts_at: a.starts_at, ends_at: a.ends_at, customer_tz: a.customer_tz };
     if (r.changes > 0) booked.push(view);
     else {
@@ -318,7 +380,7 @@ export async function sweepAppointments(db: Database, ctx: ApptNoticeCtx) {
 // ───────────────────────── admin actions ─────────────────────────
 
 /** Book (or move) an appointment for an existing order. Admin may pick any free time, even outside the weekly hours. */
-export async function adminSchedule(db: Database, opts: { appointmentId?: string; orderId?: string; sku?: string; startIso: string; durationMin?: number }) {
+export async function adminSchedule(db: Database, opts: { appointmentId?: string; orderId?: string; sku?: string; startIso: string; durationMin?: number; resourceId?: string | null }) {
   const startMs = Date.parse(opts.startIso);
   if (!Number.isFinite(startMs)) throw ApiError.invalidRequest('Invalid start time.');
   let appt: any = null;
@@ -350,17 +412,30 @@ export async function adminSchedule(db: Database, opts: { appointmentId?: string
   const cfg = await getBookingConfig(db, productId);
   const endMs = startMs + duration * 60_000;
   const id = appt?.id ?? uuid();
+  if (opts.resourceId) {
+    const [pr] = await db.query<any>(`SELECT id FROM booking_resources WHERE id = ?`, [opts.resourceId]);
+    if (!pr) throw ApiError.invalidRequest('Unknown provider.');
+  }
+  const taken = () => new ApiError('slot_taken', 409, 'That time overlaps another booking or a blocked period for this provider.');
   if (appt) {
+    const res = opts.resourceId ?? appt.resource_id;
     const r = await db.run(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, reminder_sent_at = NULL WHERE id = ? AND status = 'booked' AND ${OVERLAP_SQL}`,
-      [iso(startMs), iso(endMs), id, ...overlapParams(id, productId, startMs, endMs, cfg?.buffer_min ?? 0)]);
-    if (r.changes === 0) throw new ApiError('slot_taken', 409, 'That time overlaps another booking or a blocked period.');
+      `UPDATE appointments SET starts_at = ?, ends_at = ?, resource_id = ?, reminder_sent_at = NULL WHERE id = ? AND status = 'booked' AND ${OVERLAP_SQL}`,
+      [iso(startMs), iso(endMs), res, id, ...overlapParams(id, productId, res, startMs, endMs, cfg?.buffer_min ?? 0)]);
+    if (r.changes === 0) throw taken();
   } else {
-    const r = await db.run(
-      `INSERT INTO appointments (id, resource_id, product_id, sku, title, order_id, status, starts_at, ends_at, customer_tz, created_at)
-       SELECT ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ? WHERE ${OVERLAP_SQL}`,
-      [id, RESOURCE, productId, sku, title, orderId, iso(startMs), iso(endMs), customerTz, now(), ...overlapParams(id, productId, startMs, endMs, cfg?.buffer_min ?? 0)]);
-    if (r.changes === 0) throw new ApiError('slot_taken', 409, 'That time overlaps another booking or a blocked period.');
+    // a chosen provider, or the first provider of this service who is free at that time
+    const candidates = opts.resourceId ? [opts.resourceId] : (await providersFor(db, productId)).map((p) => p.id);
+    if (candidates.length === 0) throw ApiError.conflict('No active provider is assigned to this service.');
+    let done = false;
+    for (const res of candidates) {
+      const r = await db.run(
+        `INSERT INTO appointments (id, resource_id, product_id, sku, title, order_id, status, starts_at, ends_at, customer_tz, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ? WHERE ${OVERLAP_SQL}`,
+        [id, res, productId, sku, title, orderId, iso(startMs), iso(endMs), customerTz, now(), ...overlapParams(id, productId, res, startMs, endMs, cfg?.buffer_min ?? 0)]);
+      if (r.changes > 0) { done = true; break; }
+    }
+    if (!done) throw taken();
   }
   await db.run(`UPDATE orders SET service_status = 'scheduled' WHERE id = ? AND service_status IN ('to_schedule', 'scheduled')`, [orderId]);
   const [row] = await db.query<any>(`SELECT * FROM appointments WHERE id = ?`, [id]);
