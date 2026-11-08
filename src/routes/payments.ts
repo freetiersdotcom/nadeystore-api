@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
+import { CUSTOM_SKU, checkCustomLine, ensureCustomItem } from '../lib/custom';
 import { dispatchWebhooks } from '../lib/webhooks';
 import { createOrderFromCart } from '../lib/orders';
 import { recordPayment, paymentState, MANUAL_PAYMENT_METHODS } from '../lib/payments';
@@ -226,6 +227,7 @@ const ManualOrderBody = z.object({
     sku: z.string().min(1),
     qty: z.number().int().positive(),
     unit_price_cents: z.number().int().nonnegative().optional().openapi({ description: 'Override the catalog price (negotiated price).' }),
+    title: z.string().trim().max(200).optional().openapi({ description: 'Line description. Required, with a price, for the free-hand sku CUSTOM; otherwise replaces the catalog title.' }),
   })).min(1),
   shipping: ManualShipping.optional(),
   payment: z.object({
@@ -261,6 +263,7 @@ payments.openapi(createRoute({
   responses: { 200: { content: { 'application/json': { schema: z.any() } }, description: 'Quote' } },
 }), async (c) => {
   const b = c.req.valid('json'); const db = getDb(c.var.db);
+  if (b.items.some((i) => i.sku === CUSTOM_SKU)) await ensureCustomItem(db);       // free-hand lines weigh nothing and need no delivery
   const priced = await Promise.all(b.items.map(async (it) => {
     const [v] = await db.query<{ price_cents: number }>(`SELECT price_cents FROM variants WHERE sku = ? LIMIT 1`, [it.sku]);
     return (it.unit_price_cents ?? Number(v?.price_cents ?? 0)) * it.qty;
@@ -295,6 +298,10 @@ payments.openapi(createManual, async (c) => {
   const lines: Array<{ sku: string; title: string; qty: number; price: number; type: string }> = [];
   const wanted = new Map<string, number>(); // physical qty per sku, to catch duplicates
   for (const it of body.items) {
+    if (it.sku === CUSTOM_SKU) {
+      const problem = checkCustomLine(it); if (problem) throw ApiError.invalidRequest(problem);
+      await ensureCustomItem(db);
+    }
     const [v] = await db.query<any>(
       `SELECT v.sku, v.title, v.price_cents, v.product_type, v.digital_asset_key, p.title AS product_title
          FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku = ? LIMIT 1`,
@@ -306,7 +313,7 @@ payments.openapi(createManual, async (c) => {
     // with no file (a WiFi voucher, say) has nothing to send, and its code is handed out at the counter.
     if (type === 'digital' && v.digital_asset_key) throw ApiError.invalidRequest(`${it.sku}: digital products cannot be added to a manual order.`);
     if (type === 'physical') wanted.set(it.sku, (wanted.get(it.sku) ?? 0) + it.qty);
-    const title = v.product_title && v.product_title !== v.title ? `${v.product_title} — ${v.title}` : v.title;
+    const title = it.title?.trim() || (v.product_title && v.product_title !== v.title ? `${v.product_title} — ${v.title}` : v.title);
     lines.push({ sku: it.sku, title, qty: it.qty, price: it.unit_price_cents ?? Number(v.price_cents), type });
   }
   for (const [sku, qty] of wanted) {

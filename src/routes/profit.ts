@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { getDb, type Database } from '../db';
 import { authMiddleware, requirePermission } from '../middleware/auth';
 import { audit } from '../auth/service';
+import { CUSTOM_SKU } from '../lib/custom';
 import { ApiError, now, type HonoEnv } from '../types';
 import { minorFactor } from '../lib/currency';
 import { parseCsvObjects, safeText, toCsv } from '../lib/csv';
@@ -28,7 +29,7 @@ costRoutes.get('/', async (c) => {
   const db = getDb(c.var.db);
   const items = await db.query(
     `SELECT v.sku, p.title AS product_title, v.title AS variant_title, v.currency, v.price_cents, v.cost_cents, v.product_type, p.status AS product_status
-       FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`);
+       FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku <> ? ORDER BY p.title, v.title`, [CUSTOM_SKU]);
   return c.json({ items });
 });
 
@@ -37,7 +38,7 @@ costRoutes.put('/:sku', async (c) => {
   const b = z.object({ cost_cents: z.number().int().min(0).max(1_000_000_000).nullable() }).safeParse(await c.req.json().catch(() => null));
   if (!b.success) throw ApiError.invalidRequest('cost_cents must be a whole number (or null to clear it)');
   const db = getDb(c.var.db);
-  const [v] = await db.query(`SELECT 1 FROM variants WHERE sku = ?`, [sku]);
+  const [v] = await db.query(`SELECT 1 FROM variants WHERE sku = ? AND sku <> ?`, [sku, CUSTOM_SKU]);   // free-hand lines have no catalog cost: set it on the order line
   if (!v) throw ApiError.notFound('No product variant has this SKU.');
   await db.run(`UPDATE variants SET cost_cents = ? WHERE sku = ?`, [b.data.cost_cents, sku]);
   await audit(db, { action: 'costs.set', ...who(c), target: sku });
@@ -48,7 +49,7 @@ const major = (cents: number | null, cur: string) => (cents == null ? '' : minor
 
 costRoutes.get('/export.csv', async (c) => {
   const db = getDb(c.var.db);
-  const rows = await db.query<any>(`SELECT v.sku, p.title AS product, v.title AS variant, v.currency, v.price_cents, v.cost_cents FROM variants v JOIN products p ON p.id = v.product_id ORDER BY p.title, v.title`);
+  const rows = await db.query<any>(`SELECT v.sku, p.title AS product, v.title AS variant, v.currency, v.price_cents, v.cost_cents FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku <> ? ORDER BY p.title, v.title`, [CUSTOM_SKU]);
   const csv = toCsv(['sku', 'product', 'variant', 'currency', 'price', 'cost'], rows.map((r) => [safeText(r.sku), safeText(r.product), safeText(r.variant), r.currency, major(r.price_cents, r.currency), major(r.cost_cents, r.currency)]));
   return c.body(csv, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="costs.csv"', 'Cache-Control': 'no-store' });
 });
@@ -74,7 +75,7 @@ costRoutes.post('/import', async (c) => {
   catch (e) { return c.json({ ok: false, problems: [{ line: 1, message: e instanceof Error ? e.message : 'The file could not be read.' }], updated: 0 }, 422); }
   if (!parsed.headers.includes('sku') || !parsed.headers.includes('cost')) return c.json({ ok: false, problems: [{ line: 1, message: 'The file needs a "sku" column and a "cost" column.' }], updated: 0 }, 422);
   if (parsed.rows.length > 5000) return c.json({ ok: false, problems: [{ line: 1, message: 'Too many rows (max 5000).' }], updated: 0 }, 422);
-  const variants = await db.query<{ sku: string; currency: string }>(`SELECT sku, currency FROM variants`);
+  const variants = await db.query<{ sku: string; currency: string }>(`SELECT sku, currency FROM variants WHERE sku <> ?`, [CUSTOM_SKU]);
   const cur = new Map(variants.map((v) => [v.sku, v.currency])); const seen = new Set<string>();
   const ops: { sku: string; cents: number | null }[] = [];
   for (const r of parsed.rows) {
@@ -119,7 +120,7 @@ profitRoutes.put('/fees', async (c) => {
 });
 
 
-type Line = { sku: string; title: string; qty: number; unit_price_cents: number; cost_cents: number | null };
+type Line = { id?: string; sku: string; title: string; qty: number; unit_price_cents: number; cost_cents: number | null };
 /** One order's money, used by the report and by the single-order view so they can never disagree. */
 function figures(lines: Line[], discount: number, refund: number, payments: Record<string, number>, fees: Fees) {
   const gross = lines.reduce((n, l) => n + l.qty * l.unit_price_cents, 0);
@@ -134,20 +135,34 @@ function figures(lines: Line[], discount: number, refund: number, payments: Reco
 const dateOk = (s: string | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
 const MAX_ORDERS = 5000;
 
+// Set (or clear) what one order line cost. This is how a free-hand line gets its cost, and how an order placed before
+// costs were entered can be completed. The cost is frozen on that line only: catalog costs are not touched.
+profitRoutes.put('/order-line/:id', async (c) => {
+  noStore(c);
+  const b = z.object({ cost_cents: z.number().int().min(0).max(1_000_000_000).nullable() }).safeParse(await c.req.json().catch(() => null));
+  if (!b.success) throw ApiError.invalidRequest('cost_cents must be a whole number (or null to clear it)');
+  const db = getDb(c.var.db); const id = c.req.param('id');
+  const [l] = await db.query<{ order_id: string }>(`SELECT order_id FROM order_items WHERE id = ?`, [id]);
+  if (!l) throw ApiError.notFound('Order line not found.');
+  await db.run(`UPDATE order_items SET cost_cents = ? WHERE id = ?`, [b.data.cost_cents, id]);
+  await audit(db, { action: 'costs.line', ...who(c), target: id, meta: { order_id: l.order_id } });
+  return c.json({ id, cost_cents: b.data.cost_cents });
+});
+
 profitRoutes.get('/order/:id', async (c) => {
   noStore(c);
   const db = getDb(c.var.db); const id = c.req.param('id');
   const [o] = await db.query<{ id: string; currency: string; status: string; discount: number; shipping_cents: number }>(
     `SELECT id, currency, status, COALESCE(discount_amount_cents, 0) AS discount, shipping_cents FROM orders WHERE id = ?`, [id]);
   if (!o) throw ApiError.notFound('Order not found.');
-  const lines = await db.query<Line>(`SELECT sku, title, qty, unit_price_cents, cost_cents FROM order_items WHERE order_id = ?`, [id]);
+  const lines = await db.query<Line>(`SELECT id, sku, title, qty, unit_price_cents, cost_cents FROM order_items WHERE order_id = ?`, [id]);
   const [r] = await db.query<{ n: number | null }>(`SELECT SUM(amount_cents) AS n FROM refunds WHERE order_id = ? AND status NOT IN ('failed', 'canceled')`, [id]);
   const paidBy: Record<string, number> = {};
   for (const p of await db.query<{ method: string; n: number }>(`SELECT method, SUM(amount_cents) AS n FROM order_payments WHERE order_id = ? GROUP BY method`, [id])) paidBy[p.method] = p.n;
   const refund = r?.n ?? 0; const f = figures(lines, o.discount, refund, paidBy, await getFees(db));
   return c.json({ currency: o.currency, revenue_cents: f.net, refunded_cents: refund, discount_cents: o.discount, cost_cents: f.complete ? f.cost : null, fees_cents: f.complete ? f.fee : null,
     margin_cents: f.margin, margin_pct: f.margin != null && f.net > 0 ? Math.round((f.margin / f.net) * 1000) / 10 : null, complete: f.complete,
-    lines: lines.map((l) => ({ sku: l.sku, title: l.title, qty: l.qty, unit_price_cents: l.unit_price_cents, cost_cents: l.cost_cents })) });
+    lines: lines.map((l) => ({ id: l.id, sku: l.sku, title: l.title, qty: l.qty, unit_price_cents: l.unit_price_cents, cost_cents: l.cost_cents })) });
 });
 
 profitRoutes.get('/', async (c) => {
@@ -191,7 +206,8 @@ profitRoutes.get('/', async (c) => {
     if (!complete) { s.unknown_orders++; }
     for (const l of lines) {
       if (l.cost_cents == null) continue;
-      const key = `${o.currency}|${l.sku}`; const p = prod.get(key) ?? { currency: o.currency, sku: l.sku, title: l.title, units: 0, revenue_cents: 0, cost_cents: 0 };
+      const psku = l.sku === CUSTOM_SKU ? `${CUSTOM_SKU}: ${l.title}` : l.sku;   // free-hand lines are told apart by their description
+      const key = `${o.currency}|${psku}`; const p = prod.get(key) ?? { currency: o.currency, sku: psku, title: l.title, units: 0, revenue_cents: 0, cost_cents: 0 };
       p.units += l.qty; p.revenue_cents += Math.round(l.qty * l.unit_price_cents * k); p.cost_cents += l.qty * l.cost_cents; prod.set(key, p);
     }
     if (!complete) continue;                                     // margin only on orders whose every line has a cost

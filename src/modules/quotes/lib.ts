@@ -1,5 +1,6 @@
 import type { Database } from '../../db';
 import { minorFactor } from '../../lib/currency';
+import { CUSTOM_SKU, checkCustomLine, ensureCustomItem } from '../../lib/custom';
 
 export type QuoteItem = { sku: string; title: string; qty: number; unit_price_cents: number };
 export type QuoteRow = {
@@ -34,6 +35,12 @@ export function formatQuote(q: QuoteRow, origin: string) {
 export async function resolveItems(db: Database, lines: Array<{ sku: string; qty: number; unit_price_cents?: number; title?: string }>): Promise<QuoteItem[]> {
   const out: QuoteItem[] = [];
   for (const l of lines) {
+    if (l.sku === CUSTOM_SKU) {                                // a free-hand line: its own description and price
+      const problem = checkCustomLine(l); if (problem) throw new Error(problem);
+      await ensureCustomItem(db);
+      out.push({ sku: CUSTOM_SKU, title: l.title!.trim(), qty: l.qty, unit_price_cents: l.unit_price_cents! });
+      continue;
+    }
     const [v] = await db.query<{ sku: string; vtitle: string; ptitle: string; price_cents: number }>(
       `SELECT v.sku, v.title AS vtitle, p.title AS ptitle, v.price_cents FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku = ?`, [l.sku]
     );
