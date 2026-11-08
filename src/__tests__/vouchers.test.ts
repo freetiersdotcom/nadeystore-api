@@ -227,3 +227,20 @@ describe('variant currency', () => {
     expect(v.currency).toBe('XOF');
   });
 });
+
+describe('product delete with vouchers', () => {
+  it('refuses while codes are loaded, removes the plan when empty', async () => {
+    const dbh = db();
+    const pid = '3f2b1c1e-0000-4000-8000-00000000d0de';
+    await dbh.run(`DELETE FROM variants WHERE sku = 'DEL-1'`);
+    await dbh.run(`DELETE FROM voucher_codes WHERE sku = 'DEL-1'`);
+    await dbh.run(`INSERT OR IGNORE INTO products (id, title, status, created_at) VALUES (?, 'Del', 'draft', '2026-01-01')`, [pid]);
+    await dbh.run(`INSERT INTO variants (id, product_id, sku, title, price_cents, currency, weight_g, product_type, created_at) VALUES ('del-v1', ?, 'DEL-1', 'a', 100, 'XOF', 0, 'digital', '2026-01-01')`, [pid]);
+    await dbh.run(`INSERT OR REPLACE INTO voucher_plans (sku, created_at) VALUES ('DEL-1', '2026-01-01')`);
+    await dbh.run(`INSERT INTO voucher_codes (sku, username, password, status, created_at) VALUES ('DEL-1', 'del-user-1', 'x', 'available', '2026-01-01')`);
+    expect((await call(`/v1/products/${pid}`, { method: 'DELETE' })).status).toBe(409);
+    await dbh.run(`DELETE FROM voucher_codes WHERE sku = 'DEL-1'`);
+    expect((await call(`/v1/products/${pid}`, { method: 'DELETE' })).status).toBe(200);
+    expect(await dbh.query(`SELECT 1 FROM voucher_plans WHERE sku = 'DEL-1'`)).toHaveLength(0);
+  });
+});

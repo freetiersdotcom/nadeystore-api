@@ -414,6 +414,15 @@ app.openapi(deleteProduct, async (c) => {
     }
   }
 
+  // Optional voucher module: refuse while codes are loaded; otherwise drop the now-empty plan rows.
+  for (const v of variants) {
+    try {
+      const [code] = await db.query<any>(`SELECT 1 FROM voucher_codes WHERE sku = ? LIMIT 1`, [v.sku]);
+      if (code) throw ApiError.conflict('This product still has voucher codes loaded. Remove its voucher plan (Vouchers page) or set the product to draft instead.');
+      await db.run(`DELETE FROM voucher_plans WHERE sku = ?`, [v.sku]);
+    } catch (e) { if (e instanceof ApiError) throw e; /* module tables absent */ }
+  }
+
   for (const v of variants) {
     await db.run(`DELETE FROM inventory WHERE sku = ?`, [v.sku]);
   }
