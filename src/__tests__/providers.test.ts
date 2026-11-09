@@ -165,3 +165,16 @@ describe('managing providers', () => {
     expect((await call('/v1/bookings/providers', { json: { name: '   ' } })).status).toBe(400);
   });
 });
+
+describe('how far ahead customers can book', () => {
+  it('one request covers the whole horizon of the service, not only 45 days', async () => {
+    await db().run(`UPDATE booking_services SET horizon_days = 60, lead_hours = 24 WHERE product_id = ?`, [productId]);
+    const d = await j(await call(`/v1/bookings/slots?sku=${sku}&days=366`));
+    const last = Date.parse(d.slots[d.slots.length - 1].start);
+    const daysAhead = (last - Date.now()) / 86400_000;
+    expect(daysAhead).toBeGreaterThan(57);   // the old 45-day cap stopped around day 45
+    expect(daysAhead).toBeLessThanOrEqual(60);
+    expect(Date.parse(d.slots[0].start) - Date.now()).toBeGreaterThanOrEqual(24 * 3600_000);   // lead time still applies
+    expect((await call(`/v1/bookings/slots?sku=${sku}&days=367`)).status).toBe(400);
+  });
+});

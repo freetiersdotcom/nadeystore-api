@@ -24,7 +24,7 @@ export const DEFAULT_TZ = 'Africa/Porto-Novo';
 export const HOLD_MINUTES = 30;          // hold while the customer fills in the cart / starts payment
 export const PAYMENT_HOLD_MINUTES = 90;  // extended once the provider checkout starts
 export const REMINDER_WINDOW_H = 30;     // daily cron: remind when the session starts within this many hours
-export const MAX_RANGE_DAYS = 45;
+export const MAX_RANGE_DAYS = 366;   // one request may cover the longest allowed horizon (365 days); the service's own horizon still limits it
 
 export interface Rule { dow: number; start: string; end: string }   // dow 0 = Sunday … 6 = Saturday, "HH:MM"
 export interface BookingConfig {
