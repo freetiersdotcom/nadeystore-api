@@ -30,18 +30,18 @@ export function normalizeAttribution(i: Record<string, unknown>): Attribution | 
   return a;
 }
 
-export async function saveAttribution(db: Database, cartId: string, a: Attribution, nowIso: string): Promise<boolean> {
+export async function saveAttribution(db: Database, cartId: string, a: Attribution, nowIso: string, who: { ip?: string | null; ua?: string | null } = {}): Promise<boolean> {
   const [cart] = await db.query<{ id: string }>(`SELECT id FROM carts WHERE id = ?`, [cartId]);
   if (!cart) return false;
   // The latest campaign a visitor came from wins, until the cart becomes an order (then it is frozen).
   await db.run(
-    `INSERT INTO ad_attribution (cart_id, source, medium, campaign, content, term, click_id_type, click_id, landing, referrer, fbp, ttp, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO ad_attribution (cart_id, source, medium, campaign, content, term, click_id_type, click_id, landing, referrer, fbp, ttp, ip, ua, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(cart_id) DO UPDATE SET source = excluded.source, medium = excluded.medium, campaign = excluded.campaign, content = excluded.content,
        term = excluded.term, click_id_type = excluded.click_id_type, click_id = excluded.click_id, landing = excluded.landing, referrer = excluded.referrer,
-       fbp = excluded.fbp, ttp = excluded.ttp, created_at = excluded.created_at
+       fbp = excluded.fbp, ttp = excluded.ttp, ip = excluded.ip, ua = excluded.ua, created_at = excluded.created_at
      WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.cart_id = ad_attribution.cart_id)`,
-    [cartId, a.source, a.medium, a.campaign, a.content, a.term, a.click_id_type, a.click_id, a.landing, a.referrer, a.fbp, a.ttp, nowIso]);
+    [cartId, a.source, a.medium, a.campaign, a.content, a.term, a.click_id_type, a.click_id, a.landing, a.referrer, a.fbp, a.ttp, clean(who.ip, 64) || null, clean(who.ua, 300) || null, nowIso]);
   return true;
 }
 

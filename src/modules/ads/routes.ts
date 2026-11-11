@@ -3,12 +3,17 @@
 //   GET    /spend                 ad spend entered by hand        POST /spend { platform, campaign, from_day, to_day, amount_cents, currency, note? }
 //   DELETE /spend/:id
 //   GET    /order/:id             where one order came from (or null)
+//   GET    /pixels                Meta / TikTok pixel ids, test codes, whether a token is set (never the token), delivery counts
+//   PUT    /pixels                { meta?: {pixel_id, access_token?, test_code}, tiktok?: {...} }  (omit access_token to keep it, null to remove it)
+//   POST   /pixels/test           { platform } sends a synthetic purchase with the TEST code
+//   GET    /events                latest server-side events and their result
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { getDb } from '../../db';
 import { ApiError, now, uuid, type HonoEnv } from '../../types';
 import { audit } from '../../auth/service';
 import { buildReport } from './lib';
+import { getPixelSettings, savePixelSettings, sendTest, ready, type Platform } from './events';
 
 const app = new Hono<HonoEnv>();
 const actor = (c: any) => { const a = c.get('auth'); return { actor_user_id: a.user?.id ?? null, actor: a.user?.email ?? 'api-key', ip: c.req.header('CF-Connecting-IP') ?? null }; };
@@ -63,6 +68,46 @@ app.get('/order/:id', async (c) => {
   const [a] = await getDb(c.var.db).query(
     `SELECT a.source, a.medium, a.campaign, a.content, a.term, a.click_id_type, a.landing, a.referrer FROM orders o JOIN ad_attribution a ON a.cart_id = o.cart_id WHERE o.id = ?`, [c.req.param('id')]);
   return c.json({ attribution: a ?? null });
+});
+
+const Plat = z.object({ pixel_id: z.string().trim().max(60).regex(/^[A-Za-z0-9_-]*$/, 'The pixel id may only contain letters, digits, - and _'), access_token: z.string().trim().max(1000).nullable().optional(), test_code: z.string().trim().max(60).regex(/^[A-Za-z0-9_-]*$/, 'The test code may only contain letters and digits') });
+const Pixels = z.object({ meta: Plat.optional(), tiktok: Plat.optional() });
+
+async function pixelView(db: any) {
+  const s = await getPixelSettings(db);
+  const counts = await db.query(`SELECT platform, status, COUNT(*) AS n FROM ad_events GROUP BY platform, status`);
+  const view = (p: Platform) => ({ pixel_id: s[p].pixel_id, test_code: s[p].test_code, token_set: !!s[p].access_token, active: ready(s[p]),
+    sent: counts.find((r: any) => r.platform === p && r.status === 'sent')?.n ?? 0, failed: counts.find((r: any) => r.platform === p && r.status === 'failed')?.n ?? 0 });
+  return { meta: view('meta'), tiktok: view('tiktok') };
+}
+
+app.get('/pixels', async (c) => { noStore(c); return c.json(await pixelView(getDb(c.var.db))); });
+
+app.put('/pixels', async (c) => {
+  const b = Pixels.safeParse(await c.req.json().catch(() => null));
+  if (!b.success) throw ApiError.invalidRequest(b.error.issues[0]?.message ?? 'Invalid pixel settings');
+  const db = getDb(c.var.db); const cur = await getPixelSettings(db);
+  for (const p of ['meta', 'tiktok'] as const) {
+    const n = b.data[p]; if (!n) continue;
+    cur[p].pixel_id = n.pixel_id; cur[p].test_code = n.test_code;
+    if (n.access_token === null) cur[p].access_token = ''; else if (n.access_token) cur[p].access_token = n.access_token;
+  }
+  await savePixelSettings(db, cur);
+  await audit(db, { action: 'ads.pixels.save', ...actor(c) });
+  return c.json(await pixelView(db));
+});
+
+app.post('/pixels/test', async (c) => {
+  const b = z.object({ platform: z.enum(['meta', 'tiktok']) }).safeParse(await c.req.json().catch(() => null));
+  if (!b.success) throw ApiError.invalidRequest('platform must be "meta" or "tiktok"');
+  const r = await sendTest(getDb(c.var.db), b.data.platform);
+  return c.json({ ok: r.ok, status: r.status, detail: r.body.slice(0, 300) });
+});
+
+app.get('/events', async (c) => {
+  noStore(c);
+  const items = await getDb(c.var.db).query(`SELECT e.order_id, o.number, e.platform, e.status, e.tries, e.detail, e.updated_at FROM ad_events e LEFT JOIN orders o ON o.id = e.order_id ORDER BY e.updated_at DESC LIMIT 30`);
+  return c.json({ items });
 });
 
 export const adsAdmin = app;
