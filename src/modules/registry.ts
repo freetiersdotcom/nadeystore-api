@@ -6,9 +6,10 @@ import { affiliates } from './affiliates';
 import { vouchers } from './vouchers';
 import { recovery } from './recovery';
 import { lowstock } from './lowstock';
+import { ads } from './ads';
 
 /** Every module that exists in this build. Add yours here. */
-export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers, recovery, lowstock];
+export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers, recovery, lowstock, ads];
 for (const m of MODULES) registerModuleAccess(m.id, m.access);
 
 export const getModule = (id: string) => MODULES.find((m) => m.id === id);

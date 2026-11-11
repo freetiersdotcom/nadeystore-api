@@ -99,7 +99,7 @@ export const profitRoutes = new Hono<HonoEnv>();
 profitRoutes.use('*', authMiddleware, requirePermission('costs.manage'));
 
 type Fees = Record<string, number>;
-async function getFees(db: Database): Promise<Fees> {
+export async function getFees(db: Database): Promise<Fees> {
   const [r] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'profit_fees'`);
   try { const j = r?.value ? JSON.parse(r.value) : {}; const out: Fees = {}; for (const [k, v] of Object.entries(j)) if (Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100) out[k] = Number(v); return out; } catch { return {}; }
 }
@@ -120,9 +120,9 @@ profitRoutes.put('/fees', async (c) => {
 });
 
 
-type Line = { id?: string; sku: string; title: string; qty: number; unit_price_cents: number; cost_cents: number | null };
+export type Line = { id?: string; sku: string; title: string; qty: number; unit_price_cents: number; cost_cents: number | null };
 /** One order's money, used by the report and by the single-order view so they can never disagree. */
-function figures(lines: Line[], discount: number, refund: number, payments: Record<string, number>, fees: Fees) {
+export function figures(lines: Line[], discount: number, refund: number, payments: Record<string, number>, fees: Fees) {
   const gross = lines.reduce((n, l) => n + l.qty * l.unit_price_cents, 0);
   const net = Math.max(0, gross - discount - refund);          // what the shop kept of the goods
   const k = gross > 0 ? net / gross : 0;                       // discount and refunds spread over the lines pro rata
