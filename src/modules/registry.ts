@@ -1,5 +1,5 @@
 import type { Database } from '../db';
-import type { ModuleDef } from './types';
+import type { ModuleDef, ScheduledCtx } from './types';
 import { registerModuleAccess } from '../auth/permissions';
 import { quotes } from './quotes';
 import { affiliates } from './affiliates';
@@ -7,9 +7,10 @@ import { vouchers } from './vouchers';
 import { recovery } from './recovery';
 import { lowstock } from './lowstock';
 import { ads } from './ads';
+import { subs } from './subs';
 
 /** Every module that exists in this build. Add yours here. */
-export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers, recovery, lowstock, ads];
+export const MODULES: ModuleDef[] = [quotes, affiliates, vouchers, recovery, lowstock, ads, subs];
 for (const m of MODULES) registerModuleAccess(m.id, m.access);
 
 export const getModule = (id: string) => MODULES.find((m) => m.id === id);
@@ -63,7 +64,7 @@ export async function setEnabled(db: Database, m: ModuleDef, enabled: boolean): 
 }
 
 /** The 15-minute cron: lets enabled modules do their periodic work (runs before expired carts are cleaned up). Never throws. */
-export async function runScheduledHooks(db: Database, ctx: { storeBaseUrl: string; storeName: string }): Promise<void> {
+export async function runScheduledHooks(db: Database, ctx: ScheduledCtx): Promise<void> {
   try {
     const s = await readState(db);
     for (const id of s.enabled) {

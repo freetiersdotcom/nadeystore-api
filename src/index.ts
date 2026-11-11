@@ -179,7 +179,7 @@ export default {
       cleanupStaleCheckedOutCarts: () => Promise<number>;
     };
     // Optional modules first: abandoned-cart recovery must copy cart contents before they are cleaned up.
-    await runScheduledHooks(getDb(stub as unknown as DOStub), { storeBaseUrl: storeBase(env as any), storeName: (env as any).STORE_NAME ?? 'Your Store' });
+    await runScheduledHooks(getDb(stub as unknown as DOStub), { storeBaseUrl: storeBase(env as any), storeName: (env as any).STORE_NAME ?? 'Your Store', stub: stub as unknown as DOStub, exec: ctx });
     const cleaned = await typedStub.cleanupExpiredCarts();
     console.log(`Cron: cleaned ${cleaned} expired carts`);
     try {
