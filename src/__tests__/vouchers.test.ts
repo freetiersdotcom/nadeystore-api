@@ -98,6 +98,53 @@ describe('vouchers: loading codes', () => {
   });
 });
 
+const MIKHMON_UP = 'Username,Password,Profile,Time Limit,Data Limit,Comment\ndnrhvia,2367699,24H,1d,,up-525-11.12.26-\ndidmdji,3238376,24H,1d,,up-525-11.12.26-\nwcheufz,9249395,24H,1d,,up-525-11.12.26-\n';
+const MIKHMON_VC = 'Username,Password,Profile,Time Limit,Data Limit,Comment\nsgfm4575,sgfm4575,30D,4w2d,,vc-663-11.12.26-\nxnym8484,xnym8484,30D,4w2d,,vc-663-11.12.26-\n';
+describe('vouchers: Mikhmon CSV export', () => {
+  it('reads the six-column export by header name, keeps profile and comment, ignores the rest', () => {
+    const r = parseCodes(MIKHMON_UP);
+    expect(r.problems).toEqual([]); expect(r.profiles).toEqual({ '24H': 3 });
+    expect(r.codes[0]).toEqual({ line: 2, username: 'dnrhvia', password: '2367699', profile: '24H', comment: 'up-525-11.12.26-' });
+    const v = parseCodes(MIKHMON_VC); expect(v.codes.map((c) => [c.username, c.password])).toEqual([['sgfm4575', 'sgfm4575'], ['xnym8484', 'xnym8484']]);
+  });
+  it('copes with another column order, quotes, semicolons, CRLF, a BOM and a missing password column', () => {
+    expect(parseCodes('\uFEFF"Comment";"Profile";"Password";"Username"\r\n"x, y";"1H";"p w";"u1"\r\n').problems.map((p) => p.reason)[0]).toMatch(/password/i);
+    const r = parseCodes('Comment;Profile;Password;Username\r\nbatch-a;1H;pw1;u1\r\nbatch-a;1H;pw2;u2\r\n'); expect(r.problems).toEqual([]);
+    expect(r.codes.map((c) => [c.username, c.password, c.profile])).toEqual([['u1', 'pw1', '1H'], ['u2', 'pw2', '1H']]);
+    const t = parseCodes('Username,Profile\nonly1,1H\nonly2,1H\n'); expect(t.codes.map((c) => [c.username, c.password])).toEqual([['only1', ''], ['only2', '']]);
+  });
+  it('a headerless file with extra columns is still refused, and the message points at the header', () => {
+    const r = parseCodes('abc,pw,24H,1d'); expect(r.codes).toEqual([]); expect(r.problems[0].reason).toMatch(/header/i);
+  });
+  it('loads the file, takes the batch name from the Comment column, and a profile can be chosen', async () => {
+    const r = await j(await load(MIKHMON_UP)); expect(r.added).toBe(3); expect(r.profiles).toEqual({ '24H': 3 }); expect(r.batch).toBe('up-525-11.12.26-');
+    expect((await rows(`SELECT DISTINCT batch FROM voucher_codes`))[0].batch).toBe('up-525-11.12.26-');
+    const typed = await j(await load(MIKHMON_VC, { batch: 'Cotonou' })); expect(typed.added).toBe(2);
+    expect((await rows(`SELECT batch FROM voucher_codes WHERE username = 'sgfm4575'`))[0].batch).toBe('Cotonou');
+  });
+  it('a file mixing profiles is refused until a profile is named; naming it loads only those rows', async () => {
+    const mixed = MIKHMON_UP + MIKHMON_VC.split('\n').slice(1).join('\n');
+    const refused = await load(mixed); expect(refused.status).toBe(422); const rep = await j(refused);
+    expect(rep.profiles).toEqual({ '24H': 3, '30D': 2 }); expect(rep.problems[0].reason).toMatch(/mixes several profiles/);
+    expect((await rows(`SELECT COUNT(*) AS n FROM voucher_codes`))[0].n).toBe(0);
+    const ok = await j(await load(mixed, { profile: '30d' })); expect(ok.added).toBe(2);   // not case sensitive
+    expect((await rows(`SELECT username FROM voucher_codes ORDER BY seq`)).map((x: any) => x.username)).toEqual(['sgfm4575', 'xnym8484']);
+    expect((await load(mixed, { profile: '7D' })).status).toBe(400);
+  });
+  it('a bad line in another profile does not block the profile you chose, but one in yours does', async () => {
+    const bad = MIKHMON_UP + 'bad$name,pw,30D,1d,,c\nsgfm4575,sgfm4575,30D,4w2d,,vc\n';
+    expect((await j(await load(bad, { profile: '30D' }))).ok).toBe(false);
+    const good = await j(await load(MIKHMON_UP + 'bad$name,pw,30D,1d,,c\n', { profile: '24H' })); expect(good.added).toBe(3);
+  });
+  it('dry run reports profiles and writes nothing; existing usernames are still refused', async () => {
+    const d = await j(await load(MIKHMON_UP, { dry_run: true })); expect(d.ok).toBe(true); expect(d.to_add).toBe(3); expect(d.profiles).toEqual({ '24H': 3 });
+    expect((await rows(`SELECT COUNT(*) AS n FROM voucher_codes`))[0].n).toBe(0);
+    await load(MIKHMON_UP); const again = await load(MIKHMON_UP); expect(again.status).toBe(422);
+  });
+  it('plain lists keep working exactly as before (no profile, no batch from nowhere)', async () => {
+    const r = await j(await load(codes(3))); expect(r.added).toBe(3); expect(r.profiles).toBeUndefined(); expect((await rows(`SELECT DISTINCT batch FROM voucher_codes`))[0].batch).toBeNull();
+  });
+});
 describe('vouchers: hand-out', () => {
   it('gives one code per unit of a paid order, never twice', async () => {
     await load(codes(5)); const id = await order({ qty: 3 });

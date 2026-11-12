@@ -15,35 +15,78 @@ export function newToken(): string {
 }
 
 // ── Reading a list of codes ──────────────────────────────────────────────────────────────────────
-export type ParsedCode = { line: number; username: string; password: string };
-export type ParseReport = { codes: ParsedCode[]; problems: { line: number; text: string; reason: string }[] };
+export type ParsedCode = { line: number; username: string; password: string; profile?: string; comment?: string };
+export type ParseProblem = { line: number; text: string; reason: string; profile?: string };
+export type ParseReport = { codes: ParsedCode[]; problems: ParseProblem[]; /** how many codes per Mikhmon "Profile" when the file has that column */ profiles?: Record<string, number> };
+
+const clip = (s: string) => (s.length > 40 ? s.slice(0, 40) + '…' : s);
+const USER_HEAD = /^(username|user|login|name|code)$/i;
+// Header cells that mean "this is a table with its own columns" (a plain username,password header keeps the simple reading).
+const KNOWN_HEAD = ['profile', 'comment', 'time limit', 'data limit', 'uptime', 'bytes in', 'bytes out'];
+
+/** One CSV line into cells: quotes may hold the separator, "" is a quote. */
+export function csvCells(line: string, sep: string): string[] {
+  const out: string[] = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"' && cur === '') q = true;
+    else if (ch === sep) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map((x) => x.trim());
+}
 
 /**
- * Lines of `username` or `username,password` (comma, semicolon, tab or space; passwords have no spaces).
- * A first line saying "username"/"user"/"login" is a header and is skipped. Nothing is trusted: every value is checked.
+ * Two kinds of input, both all-or-nothing and fully checked:
+ *  - plain lines of `username` or `username,password` (comma, semicolon, tab or space; passwords have no spaces);
+ *    a first line saying "username"/"user"/"login" with no other columns is a header and is skipped;
+ *  - a CSV with a header row (the Mikhmon "Export users" file: Username,Password,Profile,Time Limit,Data Limit,Comment).
+ *    Columns are found by name, the others are ignored; Profile and Comment are kept so the screen can pick one profile
+ *    and name the batch.
  */
 export function parseCodes(text: string): ParseReport {
-  const codes: ParsedCode[] = []; const problems: ParseReport['problems'] = []; const seen = new Map<string, number>();
-  const lines = text.replace(/^﻿/, '').split(/\r\n|\n|\r/);
-  let used = 0;
+  const codes: ParsedCode[] = []; const problems: ParseProblem[] = []; const seen = new Map<string, number>();
+  const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/);
+  let used = 0; let cols: { sep: string; user: number; pass: number; profile: number; comment: number } | null = null;
   lines.forEach((raw, i) => {
     const line = i + 1; const t = raw.trim();
     if (!t) return;
-    if (used === 0 && /^(username|user|login|name|code)\b/i.test(t) && /[,;\t ]/.test(t)) { used++; return; }
+    if (used === 0) {
+      const sep = [',', ';', '\t'].find((x) => t.includes(x));
+      if (sep) {
+        const cells = csvCells(t, sep); const low = cells.map((x) => x.toLowerCase());
+        const user = cells.findIndex((x) => USER_HEAD.test(x));
+        if (user >= 0 && low.some((x) => KNOWN_HEAD.includes(x))) {
+          cols = { sep, user, pass: low.findIndex((x) => ['password', 'pass', 'pwd', 'mot de passe'].includes(x)), profile: low.indexOf('profile'), comment: low.indexOf('comment') };
+          used++; return;
+        }
+      }
+      if (/^(username|user|login|name|code)\b/i.test(t) && /[,;\t ]/.test(t)) { used++; return; }
+    }
     used++;
     if (used > MAX_LINES) { if (used === MAX_LINES + 1) problems.push({ line, text: '', reason: `More than ${MAX_LINES} lines: split the file.` }); return; }
-    const parts = t.split(/[,;\t ]+/).filter((x, k) => !(k > 1 && x === ''));
-    const clip = (s: string) => (s.length > 40 ? s.slice(0, 40) + '…' : s);
-    if (parts.length > 2) { problems.push({ line, text: clip(t), reason: 'Too many columns (expected username and optional password).' }); return; }
-    const [username, password = ''] = parts;
-    if (!USER_RE.test(username)) { problems.push({ line, text: clip(username), reason: 'Invalid username (letters, digits and . _ @ : + - only, up to 64).' }); return; }
-    if (!PASS_RE.test(password)) { problems.push({ line, text: clip(username), reason: 'Invalid password (visible characters only, no spaces, up to 64).' }); return; }
+    let username: string; let password = ''; let profile: string | undefined; let comment: string | undefined;
+    if (cols) {
+      const c = csvCells(t, cols.sep);
+      username = c[cols.user] ?? ''; password = cols.pass >= 0 ? c[cols.pass] ?? '' : '';
+      profile = cols.profile >= 0 ? c[cols.profile] || undefined : undefined; comment = cols.comment >= 0 ? c[cols.comment] || undefined : undefined;
+    } else {
+      const parts = t.split(/[,;\t ]+/).filter((x, k) => !(k > 1 && x === ''));
+      if (parts.length > 2) { problems.push({ line, text: clip(t), reason: 'Too many columns (expected username and optional password). A Mikhmon export needs its header line (Username,Password,Profile…).' }); return; }
+      [username, password = ''] = parts;
+    }
+    if (!USER_RE.test(username)) { problems.push({ line, text: clip(username), reason: 'Invalid username (letters, digits and . _ @ : + - only, up to 64).', profile }); return; }
+    if (!PASS_RE.test(password)) { problems.push({ line, text: clip(username), reason: 'Invalid password (visible characters only, no spaces, up to 64).', profile }); return; }
     const key = username.toLowerCase();
-    if (seen.has(key)) { problems.push({ line, text: clip(username), reason: `Appears twice in the file (first on line ${seen.get(key)}).` }); return; }
+    if (seen.has(key)) { problems.push({ line, text: clip(username), reason: `Appears twice in the file (first on line ${seen.get(key)}).`, profile }); return; }
     seen.set(key, line);
-    codes.push({ line, username, password });
+    codes.push({ line, username, password, ...(profile ? { profile } : {}), ...(comment ? { comment } : {}) });
   });
-  return { codes, problems };
+  const profiles: Record<string, number> = {};
+  for (const c of codes) if (c.profile) profiles[c.profile] = (profiles[c.profile] ?? 0) + 1;
+  return { codes, problems, ...(Object.keys(profiles).length ? { profiles } : {}) };
 }
 
 // ── Delivering codes to paid orders ──────────────────────────────────────────────────────────────

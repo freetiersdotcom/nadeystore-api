@@ -66,12 +66,25 @@ app.delete('/plans/:sku', async (c) => {
 
 app.post('/plans/:sku/codes', async (c) => {
   const sku = c.req.param('sku');
-  const b = await body(c, z.object({ text: z.string().max(400_000), batch: z.string().trim().max(80).optional(), dry_run: z.boolean().optional() }));
+  const b = await body(c, z.object({ text: z.string().max(400_000), batch: z.string().trim().max(80).optional(), dry_run: z.boolean().optional(), profile: z.string().trim().max(64).optional() }));
   const db = getDb(c.var.db);
   const [plan] = await db.query(`SELECT 1 FROM voucher_plans WHERE sku = ?`, [sku]);
   if (!plan) throw ApiError.notFound('Make this product a voucher plan first.');
-  const { codes, problems } = parseCodes(b.text);
-  if (codes.length === 0 && problems.length === 0) throw ApiError.invalidRequest('The list is empty.');
+  const parsed = parseCodes(b.text);
+  if (parsed.codes.length === 0 && parsed.problems.length === 0) throw ApiError.invalidRequest('The list is empty.');
+  // A Mikhmon export holds a "Profile" column (24H, 30D…). One product sells one profile, so the owner chooses which
+  // rows to take; a file mixing profiles is refused until a profile is named, so a 30-day code can never land on a 1-day product.
+  const profiles = parsed.profiles; const names = Object.keys(profiles ?? {});
+  let codes = parsed.codes; let problems = parsed.problems; const wanted = b.profile?.toLowerCase();
+  if (wanted) {
+    if (!names.some((n) => n.toLowerCase() === wanted)) throw ApiError.invalidRequest(`No code with the profile "${b.profile}" in this file${names.length ? ` (found: ${names.join(', ')})` : ' (the file has no Profile column)'}.`);
+    codes = codes.filter((x) => (x.profile ?? '').toLowerCase() === wanted);
+    problems = problems.filter((x) => !x.profile || x.profile.toLowerCase() === wanted);
+  } else if (names.length > 1) {
+    problems = [{ line: 0, text: '', reason: `The file mixes several profiles (${names.map((n) => `${n}: ${profiles![n]}`).join(', ')}). Choose the profile this product sells.` }, ...problems];
+  }
+  const comments = [...new Set(codes.map((x) => x.comment).filter(Boolean))];
+  const batchName = b.batch || (comments.length === 1 ? (comments[0] as string).slice(0, 80) : undefined);
   // Codes that already exist (anywhere: a username is unique on the router).
   const clash: typeof problems = [];
   for (let i = 0; i < codes.length; i += 200) {
@@ -81,13 +94,13 @@ app.post('/plans/:sku/codes', async (c) => {
     for (const x of chunk) if (byName.has(x.username.toLowerCase())) clash.push({ line: x.line, text: x.username, reason: `Already loaded${byName.get(x.username.toLowerCase()) === sku ? '' : ` (for ${byName.get(x.username.toLowerCase())})`}.` });
   }
   const all = [...problems, ...clash].sort((a, z2) => a.line - z2.line);
-  const report = { lines: codes.length + all.length, problems: all, ok: all.length === 0, to_add: codes.length - clash.length };
+  const report = { lines: codes.length + all.length, problems: all, ok: all.length === 0, to_add: codes.length - clash.length, ...(profiles ? { profiles } : {}), ...(wanted ? { profile: b.profile } : {}), ...(batchName ? { batch: batchName } : {}) };
   if (!report.ok) return c.json({ ...report, added: 0 }, 422);
   if (b.dry_run) return c.json({ ...report, added: 0 });
   const ts = now();
-  for (const x of codes) await db.run(`INSERT INTO voucher_codes (sku, username, password, status, batch, created_at) VALUES (?, ?, ?, 'available', ?, ?)`, [sku, x.username, x.password, b.batch || null, ts]);
+  for (const x of codes) await db.run(`INSERT INTO voucher_codes (sku, username, password, status, batch, created_at) VALUES (?, ?, ?, 'available', ?, ?)`, [sku, x.username, x.password, batchName || null, ts]);
   await reconcile(db);   // paid orders that were waiting are served now, in the order they were paid
-  await audit(db, { action: 'voucher.loaded', ...actor(c), target: sku, meta: { count: codes.length, batch: b.batch ?? null } });
+  await audit(db, { action: 'voucher.loaded', ...actor(c), target: sku, meta: { count: codes.length, batch: batchName ?? null, profile: b.profile ?? null } });
   return c.json({ ...report, added: codes.length });
 });
 
