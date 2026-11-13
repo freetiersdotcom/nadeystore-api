@@ -46,7 +46,7 @@ const delivery = async (id: string) => j(await call(`/v1/m/vouchers/orders/${id}
 
 beforeEach(async () => {
   const d = db();
-  for (const t of ['voucher_plans', 'voucher_codes', 'voucher_orders', 'voucher_settings', 'voucher_low', 'voucher_low_state', 'voucher_alert_settings']) await d.run(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['voucher_plans', 'voucher_codes', 'voucher_orders', 'voucher_settings', 'voucher_low', 'voucher_low_state', 'voucher_alert_settings', 'voucher_locations']) await d.run(`DROP TABLE IF EXISTS ${t}`);
   await d.run(`DELETE FROM config WHERE key IN ('modules', 'email')`);
   await d.run(`DELETE FROM audit_log WHERE action LIKE 'voucher.%' OR action LIKE 'module.%'`);
   for (const t of ['refunds', 'order_payments', 'order_items', 'orders', 'api_keys']) await d.run(`DELETE FROM ${t}`);
@@ -407,5 +407,70 @@ describe('product delete with vouchers', () => {
     await dbh.run(`DELETE FROM voucher_codes WHERE sku = 'DEL-1'`);
     expect((await call(`/v1/products/${pid}`, { method: 'DELETE' })).status).toBe(200);
     expect(await dbh.query(`SELECT 1 FROM voucher_plans WHERE sku = 'DEL-1'`)).toHaveLength(0);
+  });
+});
+
+describe('vouchers: locations', () => {
+  const list = async () => j(await call('/v1/m/vouchers'));
+  const productOf = async (s = sku) => (await rows<{ product_id: string }>(`SELECT product_id FROM variants WHERE sku = ?`, [s]))[0].product_id;
+
+  it('a plan registers its product as a location, once', async () => {
+    const pid = await productOf(); const l = await list();
+    expect(l.locations.map((x: any) => x.product_id)).toEqual([pid]);
+    expect(l.items[0].product_id).toBe(pid);
+    expect((await plan()).status).toBe(200);
+    expect((await list()).locations).toHaveLength(1);
+  });
+
+  it('a location with no plan can exist, and shows with its title', async () => {
+    const other = await seedProduct(db()); const pid = await productOf(other.sku);
+    expect((await call(`/v1/m/vouchers/locations/${pid}`, { method: 'PUT', json: {} })).status).toBe(200);
+    const l = await list(); expect(l.locations).toHaveLength(2);
+    expect(l.locations.find((x: any) => x.product_id === pid).title).toBe('Test Product');
+    expect(l.items.some((x: any) => x.product_id === pid)).toBe(false);
+  });
+
+  it('unknown product: 404', async () => {
+    expect((await call('/v1/m/vouchers/locations/nope', { method: 'PUT', json: {} })).status).toBe(404);
+  });
+
+  it('a location is removed only when it has no plan', async () => {
+    const pid = await productOf();
+    expect((await call(`/v1/m/vouchers/locations/${pid}`, { method: 'DELETE' })).status).toBe(409);
+    expect((await call(`/v1/m/vouchers/plans/${sku}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/v1/m/vouchers/locations/${pid}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await list()).locations).toHaveLength(0);
+  });
+
+  it('a location whose product was deleted is not listed', async () => {
+    const other = await seedProduct(db()); const pid = await productOf(other.sku);
+    await call(`/v1/m/vouchers/locations/${pid}`, { method: 'PUT', json: {} });
+    await db().run(`DELETE FROM variants WHERE product_id = ?`, [pid]); await db().run(`DELETE FROM products WHERE id = ?`, [pid]);
+    expect((await list()).locations.some((x: any) => x.product_id === pid)).toBe(false);
+  });
+
+  it('location instructions are the default; a plan with its own text wins; empty plan text falls back', async () => {
+    const pid = await productOf(); const cart = 'cart-loc-instr-1';
+    await load('c1'); await order({ cart });
+    expect((await call(`/v1/m/vouchers/locations/${pid}`, { method: 'PUT', json: { instructions_fr: 'Réseau Café, page de connexion.', instructions_en: 'Network Café, login page.' } })).status).toBe(200);
+    // the plan has its own text (set in beforeEach): it wins
+    let r = await j(await call(`/m/vouchers/by-cart/${cart}`, { key: null })); expect(r.items[0].instructions).toBe('Connectez-vous au WiFi.');
+    // emptied plan text: the location text is used, in both languages
+    await plan({ instructions_fr: '', instructions_en: '' });
+    r = await j(await call(`/m/vouchers/by-cart/${cart}`, { key: null })); expect(r.items[0].instructions).toBe('Réseau Café, page de connexion.');
+    r = await j(await call(`/m/vouchers/by-cart/${cart}?lang=en`, { key: null })); expect(r.items[0].instructions).toBe('Network Café, login page.');
+  });
+
+  it('location instructions are also in the e-mail', async () => {
+    const pid = await productOf(); await seedEmailConfig(db());
+    await plan({ instructions_fr: '', instructions_en: '' });
+    await call(`/v1/m/vouchers/locations/${pid}`, { method: 'PUT', json: { instructions_fr: 'Réseau Café.', instructions_en: 'Network Café.' } });
+    await load('c1'); await order({ email: 'x@shop.test' }); await reconcile(); await new Promise((r) => setTimeout(r, 150));
+    expect(JSON.stringify(sent)).toContain('Réseau Café.');
+  });
+
+  it('only managers write; staff read', async () => {
+    expect(roleCanRequest('staff', 'PUT', '/v1/m/vouchers/locations/x').ok).toBe(false);
+    expect(roleCanRequest('manager', 'PUT', '/v1/m/vouchers/locations/x').ok).toBe(true);
   });
 });

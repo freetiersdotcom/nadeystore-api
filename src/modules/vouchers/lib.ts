@@ -155,7 +155,8 @@ async function maybeEmail(db: Database, orderId: string): Promise<void> {
   if (!provider) return;
   await db.run(`UPDATE voucher_orders SET email_tries = email_tries + 1 WHERE order_id = ?`, [orderId]);
   const codes = await db.query<CodeRow & { instructions_fr: string | null; instructions_en: string | null }>(
-    `SELECT c.*, p.instructions_fr, p.instructions_en FROM voucher_codes c JOIN voucher_plans p ON p.sku = c.sku WHERE c.order_id = ? ORDER BY c.seq`, [orderId]);
+    `SELECT c.*, COALESCE(NULLIF(p.instructions_fr, ''), l.instructions_fr) AS instructions_fr, COALESCE(NULLIF(p.instructions_en, ''), l.instructions_en) AS instructions_en
+       FROM voucher_codes c JOIN voucher_plans p ON p.sku = c.sku LEFT JOIN variants v ON v.sku = p.sku LEFT JOIN voucher_locations l ON l.product_id = v.product_id WHERE c.order_id = ? ORDER BY c.seq`, [orderId]);
   const [st] = await db.query<{ origin: string | null }>(`SELECT origin FROM voucher_settings WHERE id = 1`);
   const lang = (o.locale ?? 'fr').slice(0, 2) === 'en' ? 'en' : 'fr';
   const link = st?.origin ? `${st.origin}/m/vouchers/o/${vo.token}` : '';

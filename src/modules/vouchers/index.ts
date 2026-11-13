@@ -10,12 +10,12 @@ import { runVoucherCheck } from './alerts';
 // If the codes run out, paid orders wait and are served first-come-first-served as soon as you load more.
 export const vouchers: ModuleDef = {
   id: 'vouchers',
-  name: { fr: 'Vouchers WiFi', en: 'WiFi vouchers' },
+  name: { fr: 'Tickets WiFi', en: 'WiFi vouchers' },
   description: {
-    fr: 'Vendez des codes d’accès (hotspot MikroTik, Mikhmon…) : chargez vos codes, liez-les à des produits, et chaque commande payée reçoit son code automatiquement, même en cas de vente au comptoir.',
-    en: 'Sell access codes (MikroTik hotspot, Mikhmon…): load your codes, link them to products, and every paid order gets its code automatically, counter sales included.',
+    fr: 'Vendez des tickets WiFi (hotspot MikroTik, Mikhmon…) : organisez vos sites et forfaits, chargez vos codes, et chaque commande payée reçoit son ticket automatiquement, même en cas de vente au comptoir.',
+    en: 'Sell access codes (MikroTik hotspot, Mikhmon…): organise locations and plans, load your codes, and every paid order gets its code automatically, counter sales included.',
   },
-  version: 2,
+  version: 3,
   migrate: [
     // A plan is a product variant (its price, name and stock label live in the catalog) that is sold as a code.
     `CREATE TABLE IF NOT EXISTS voucher_plans (
@@ -55,6 +55,9 @@ export const vouchers: ModuleDef = {
     `CREATE TABLE IF NOT EXISTS voucher_low_state (sku TEXT PRIMARY KEY, level TEXT NOT NULL CHECK (level IN ('low', 'out')), alerted_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS voucher_alert_settings (id INTEGER PRIMARY KEY CHECK (id = 1), default_threshold INTEGER NOT NULL DEFAULT 10, emails TEXT NOT NULL DEFAULT '', push INTEGER NOT NULL DEFAULT 1)`,
     `INSERT OR IGNORE INTO voucher_alert_settings (id) VALUES (1)`,
+    // Locations (version 3): a location is the catalog product that holds one or more plans (variants). Its instructions are the default for its plans.
+    `CREATE TABLE IF NOT EXISTS voucher_locations (product_id TEXT PRIMARY KEY, instructions_fr TEXT, instructions_en TEXT, created_at TEXT NOT NULL)`,
+    `INSERT OR IGNORE INTO voucher_locations (product_id, created_at) SELECT DISTINCT v.product_id, datetime('now') FROM voucher_plans p JOIN variants v ON v.sku = p.sku`,
   ],
   access: { manager: 'write', staff: 'read' },
   hooks: {

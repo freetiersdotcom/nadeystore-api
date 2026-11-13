@@ -17,7 +17,8 @@ async function view(db: ReturnType<typeof getDb>, orderId: string, lang: 'fr' | 
   await reconcile(db, orderId);
   const d = await deliveryOf(db, orderId);
   if (!d) return { status: 'none' as Status, items: [] };
-  const rows = await db.query<{ sku: string; instructions_fr: string | null; instructions_en: string | null }>(`SELECT sku, instructions_fr, instructions_en FROM voucher_plans`);
+  const rows = await db.query<{ sku: string; instructions_fr: string | null; instructions_en: string | null }>(`SELECT p.sku, COALESCE(NULLIF(p.instructions_fr, ''), l.instructions_fr) AS instructions_fr, COALESCE(NULLIF(p.instructions_en, ''), l.instructions_en) AS instructions_en
+       FROM voucher_plans p LEFT JOIN variants v ON v.sku = p.sku LEFT JOIN voucher_locations l ON l.product_id = v.product_id`);
   const ins = new Map(rows.map((r) => [r.sku, (lang === 'en' ? r.instructions_en || r.instructions_fr : r.instructions_fr || r.instructions_en) ?? null]));
   const [o] = await db.query<{ status: string; paid: number; total: number }>(`SELECT status, COALESCE(amount_paid_cents, 0) AS paid, total_cents AS total FROM orders WHERE id = ?`, [orderId]);
   const paid = o.paid >= o.total && o.total > 0;

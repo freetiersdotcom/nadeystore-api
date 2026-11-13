@@ -40,7 +40,7 @@ function digest(rows: PlanLevel[], storeName: string) {
   const out = rows.filter((r) => r.level === 'out').length;
   const subject = out ? `${storeName} — vouchers : ${out} épuisé(s), ${rows.length - out} bientôt épuisé(s) / vouchers: ${out} out, ${rows.length - out} running low` : `${storeName} — vouchers bientôt épuisés / vouchers running low`;
   const line = (r: PlanLevel) => `${label(r)}: ${r.available} code(s) restants/left (seuil/threshold ${r.threshold})${r.level === 'out' ? ' ÉPUISÉ/OUT' : ''}${r.waiting ? ` — ${r.waiting} commande(s) payée(s) en attente / paid order(s) waiting` : ''}`;
-  const html = `<div style="font-family:system-ui,sans-serif;max-width:560px"><p><b>Vouchers WiFi</b> — chargez de nouveaux codes / load more codes</p><ul>${rows.map((r) => `<li>${esc(line(r))}</li>`).join('')}</ul></div>`;
+  const html = `<div style="font-family:system-ui,sans-serif;max-width:560px"><p><b>Tickets WiFi</b> — chargez de nouveaux codes / load more codes</p><ul>${rows.map((r) => `<li>${esc(line(r))}</li>`).join('')}</ul></div>`;
   return { subject, html, text: rows.map((r) => `- ${line(r)}`).join('\n') };
 }
 

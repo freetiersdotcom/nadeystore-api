@@ -1,6 +1,9 @@
 // Admin API of the vouchers module, mounted at /v1/m/vouchers (sign-in and role are checked by the framework).
 //   GET    /                          plans with their stock + how many paid units are waiting for a code
-//   PUT    /plans/:sku                make a product variant a voucher plan { instructions_fr?, instructions_en? }
+//   GET    /                          also returns `locations` (the catalog products that hold plans, with their default instructions)
+//   PUT    /locations/:productId      register a product as a location / set its default instructions { instructions_fr?, instructions_en? }
+//   DELETE /locations/:productId      forget a location (only when it has no plan)
+//   PUT    /plans/:sku                make a product variant a voucher plan { instructions_fr?, instructions_en? } (its product becomes a location)
 //   DELETE /plans/:sku                stop selling it as a code (only when it holds no codes)
 //   POST   /plans/:sku/codes          load codes { text, batch?, dry_run? } — checked in full first, all or nothing
 //   GET    /codes                     ?sku= &status= &q= (a code or part of one) &limit=
@@ -41,7 +44,7 @@ app.get('/', async (c) => {
   const db = getDb(c.var.db);
   await reconcile(db);
   const plans = await db.query<any>(
-    `SELECT p.sku, p.instructions_fr, p.instructions_en, v.title AS variant_title, pr.title AS product_title, v.price_cents, v.currency,
+    `SELECT p.sku, v.product_id, p.instructions_fr, p.instructions_en, v.title AS variant_title, pr.title AS product_title, v.price_cents, v.currency,
             (SELECT COUNT(*) FROM voucher_codes c WHERE c.sku = p.sku AND c.status = 'available') AS available,
             (SELECT COUNT(*) FROM voucher_codes c WHERE c.sku = p.sku AND c.status = 'sold') AS sold,
             (SELECT COUNT(*) FROM voucher_codes c WHERE c.sku = p.sku AND c.status = 'void') AS void,
@@ -49,15 +52,45 @@ app.get('/', async (c) => {
                        WHERE oi.sku = p.sku AND o.status NOT IN ('canceled', 'refunded') AND COALESCE(o.amount_paid_cents, 0) >= o.total_cents AND o.total_cents > 0), 0) AS waiting
        FROM voucher_plans p LEFT JOIN variants v ON v.sku = p.sku LEFT JOIN products pr ON pr.id = v.product_id ORDER BY pr.title, v.title`);
   const lv = new Map((await planLevels(db)).map((x) => [x.sku, x]));
-  return c.json({ items: plans.map((p: any) => ({ ...p, threshold: lv.get(p.sku)?.threshold ?? null, level: lv.get(p.sku)?.level ?? 'ok', muted: lv.get(p.sku)?.muted ?? 0 })) });
+  const locations = await db.query<any>(
+    `SELECT l.product_id, pr.title, l.instructions_fr, l.instructions_en FROM voucher_locations l JOIN products pr ON pr.id = l.product_id ORDER BY pr.title`);
+  return c.json({ items: plans.map((p: any) => ({ ...p, threshold: lv.get(p.sku)?.threshold ?? null, level: lv.get(p.sku)?.level ?? 'ok', muted: lv.get(p.sku)?.muted ?? 0 })), locations });
+});
+
+const insBody = z.object({ instructions_fr: z.string().trim().max(2000).optional(), instructions_en: z.string().trim().max(2000).optional() });
+
+app.put('/locations/:productId', async (c) => {
+  const id = c.req.param('productId');
+  const b = await body(c, insBody);
+  const db = getDb(c.var.db);
+  const [pr] = await db.query(`SELECT 1 FROM products WHERE id = ?`, [id]);
+  if (!pr) throw ApiError.notFound('No product has this id.');
+  await db.run(
+    `INSERT INTO voucher_locations (product_id, instructions_fr, instructions_en, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(product_id) DO UPDATE SET instructions_fr = COALESCE(?, instructions_fr), instructions_en = COALESCE(?, instructions_en)`,
+    [id, b.instructions_fr ?? null, b.instructions_en ?? null, now(), b.instructions_fr ?? null, b.instructions_en ?? null]
+  );
+  await audit(db, { action: 'voucher.location', ...actor(c), target: id });
+  return c.json({ product_id: id });
+});
+
+app.delete('/locations/:productId', async (c) => {
+  const id = c.req.param('productId');
+  const db = getDb(c.var.db);
+  const [has] = await db.query(`SELECT 1 FROM voucher_plans p JOIN variants v ON v.sku = p.sku WHERE v.product_id = ? LIMIT 1`, [id]);
+  if (has) throw ApiError.conflict('This location still has plans. Remove them first.');
+  await db.run(`DELETE FROM voucher_locations WHERE product_id = ?`, [id]);
+  await audit(db, { action: 'voucher.location.delete', ...actor(c), target: id });
+  return c.json({ deleted: true });
 });
 
 app.put('/plans/:sku', async (c) => {
   const sku = c.req.param('sku');
-  const b = await body(c, z.object({ instructions_fr: z.string().trim().max(2000).optional(), instructions_en: z.string().trim().max(2000).optional() }));
+  const b = await body(c, insBody);
   const db = getDb(c.var.db);
-  const [v] = await db.query(`SELECT 1 FROM variants WHERE sku = ?`, [sku]);
+  const [v] = await db.query<{ product_id: string }>(`SELECT product_id FROM variants WHERE sku = ?`, [sku]);
   if (!v) throw ApiError.notFound('No product variant has this SKU.');
+  await db.run(`INSERT OR IGNORE INTO voucher_locations (product_id, created_at) VALUES (?, ?)`, [v.product_id, now()]);
   await db.run(
     `INSERT INTO voucher_plans (sku, instructions_fr, instructions_en, created_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(sku) DO UPDATE SET instructions_fr = COALESCE(?, instructions_fr), instructions_en = COALESCE(?, instructions_en)`,
