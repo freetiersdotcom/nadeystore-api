@@ -8,6 +8,8 @@ import { getDb } from '../db';
 import { seedApiKeys, seedProduct, seedEmailConfig, mockFetch, MOCK_RESPONSES } from './setup';
 import { parseCodes } from '../modules/vouchers/lib';
 import { recordPayment } from '../lib/payments';
+import { roleCanRequest } from '../auth/permissions';
+import { runVoucherCheck } from '../modules/vouchers/alerts';
 
 const db = () => getDb(env.MERCHANT.get(env.MERCHANT.idFromName('default')) as any);
 let adminKey = ''; let ip = 0; let seq = 0; let sent: any[] = []; let restore = () => {};
@@ -44,7 +46,7 @@ const delivery = async (id: string) => j(await call(`/v1/m/vouchers/orders/${id}
 
 beforeEach(async () => {
   const d = db();
-  for (const t of ['voucher_plans', 'voucher_codes', 'voucher_orders', 'voucher_settings']) await d.run(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['voucher_plans', 'voucher_codes', 'voucher_orders', 'voucher_settings', 'voucher_low', 'voucher_low_state', 'voucher_alert_settings']) await d.run(`DROP TABLE IF EXISTS ${t}`);
   await d.run(`DELETE FROM config WHERE key IN ('modules', 'email')`);
   await d.run(`DELETE FROM audit_log WHERE action LIKE 'voucher.%' OR action LIKE 'module.%'`);
   for (const t of ['refunds', 'order_payments', 'order_items', 'orders', 'api_keys']) await d.run(`DELETE FROM ${t}`);
@@ -250,6 +252,122 @@ describe('vouchers: e-mail', () => {
     expect(sent.length).toBe(0);
     await seedEmailConfig(db());
     const r = await call(`/v1/m/vouchers/orders/${id}/resend`, { json: {} }); expect(r.status).toBe(200); expect((await j(r)).emailed).toBe(true);
+  });
+});
+
+const batchOp = (sku_: string, batch: string | null, action: string, extra: Record<string, unknown> = {}) => call('/v1/m/vouchers/batches', { json: { sku: sku_, batch, action, ...extra } });
+const count = async (where = '1=1', a: unknown[] = []) => Number((await rows(`SELECT COUNT(*) AS n FROM voucher_codes WHERE ${where}`, a))[0].n);
+const seqOf = async (user: string) => Number((await rows(`SELECT seq FROM voucher_codes WHERE username = ?`, [user]))[0].seq);
+const mails = () => sent.filter((m) => /vouchers/i.test(String(m.subject)));
+
+describe('vouchers: managing loaded codes', () => {
+  it('lists batches with their counts, and codes without a batch too', async () => {
+    await load(codes(3, 'a'), { batch: 'Nov-A' }); await load(codes(2, 'b'));
+    const o = await j(await call(`/v1/m/vouchers/batches?sku=${sku}`));
+    expect(o.items.map((x: any) => [x.batch, x.total, x.available, x.sold, x.void])).toEqual([[null, 2, 2, 0, 0], ['Nov-A', 3, 3, 0, 0]]);
+  });
+  it('void takes unsold codes of a batch off sale, keeps sold ones, restore brings back only the never-sold ones; dry run changes nothing', async () => {
+    await load(codes(4, 'a'), { batch: 'A' }); const id = await order({ qty: 1 }); await reconcile();   // one of them is sold
+    const dry = await j(await batchOp(sku, 'A', 'void', { dry_run: true })); expect(dry).toMatchObject({ affected: 3, kept_sold: 1, dry_run: true }); expect(await count(`status = 'void'`)).toBe(0);
+    expect(await j(await batchOp(sku, 'A', 'void'))).toMatchObject({ affected: 3, kept_sold: 1 }); expect(await count(`status = 'void'`)).toBe(3); expect(await count(`status = 'sold'`)).toBe(1);
+    expect((await j(await call('/v1/m/vouchers'))).items[0].available).toBe(0);
+    expect(await j(await batchOp(sku, 'A', 'restore'))).toMatchObject({ affected: 3 }); expect(await count(`status = 'available'`)).toBe(3);
+    expect((await delivery(id)).items[0].codes.length).toBe(1);   // the buyer's code is untouched
+  });
+  it('a sold code that was flagged as withdrawn never goes back on sale, even with its batch', async () => {
+    await load(codes(2), { batch: 'A' }); await order({ qty: 1 }); await reconcile();
+    const sold = (await rows(`SELECT seq FROM voucher_codes WHERE status = 'sold'`))[0].seq; await call(`/v1/m/vouchers/codes/${sold}/void`, { json: {} });
+    await batchOp(sku, 'A', 'void'); const r = await j(await batchOp(sku, 'A', 'restore')); expect(r).toMatchObject({ affected: 1, kept_sold: 1 });
+    expect((await rows(`SELECT status FROM voucher_codes WHERE seq = ?`, [sold]))[0].status).toBe('void'); expect(await count(`status = 'available'`)).toBe(1);
+  });
+  it('voiding everything makes a paid order wait; restoring serves it', async () => {
+    await load(codes(2), { batch: 'A' }); await batchOp(sku, 'A', 'void'); const id = await order({ qty: 1 }); await reconcile();
+    expect((await delivery(id)).items[0].waiting).toBe(1);
+    await batchOp(sku, 'A', 'restore'); expect((await delivery(id)).items[0].codes.length).toBe(1);
+  });
+  it('delete removes unsold codes only; sold codes stay as records; unknown batch is a 404', async () => {
+    await load(codes(3, 'a'), { batch: 'A' }); await order({ qty: 1 }); await reconcile();
+    expect(await j(await batchOp(sku, 'A', 'delete'))).toMatchObject({ affected: 2, kept_sold: 1 }); expect(await count()).toBe(1); expect(await count(`status = 'sold'`)).toBe(1);
+    expect((await batchOp(sku, 'nope', 'delete')).status).toBe(404);
+  });
+  it('move sends the unsold codes to another voucher product and serves orders waiting there', async () => {
+    const sku2 = (await seedProduct(db())).sku; expect((await plan({}, sku2)).status).toBe(200);
+    await load(codes(3, 'a'), { batch: 'A' }); const waiting = await order({ qty: 1, s: sku2 }); await reconcile(); expect((await delivery(waiting)).items[0].waiting).toBe(1);
+    const r = await j(await batchOp(sku, 'A', 'move', { to_sku: sku2 })); expect(r.affected).toBe(3);
+    expect(await count(`sku = ?`, [sku2])).toBe(3); expect((await delivery(waiting)).items[0].codes.length).toBe(1);
+    expect((await batchOp(sku2, 'A', 'move', { to_sku: sku2 })).status).toBe(400); expect((await batchOp(sku2, 'A', 'move', { to_sku: 'NOT-A-PLAN' })).status).toBe(400);
+  });
+  it('rename relabels the whole batch (also sold codes), and an empty name removes the label', async () => {
+    await load(codes(2), { batch: 'A' }); await order({ qty: 1 }); await reconcile();
+    await batchOp(sku, 'A', 'rename', { new_name: 'Café X — Nov' }); expect(await count(`batch = 'Café X — Nov'`)).toBe(2);
+    await batchOp(sku, 'Café X — Nov', 'rename', { new_name: '' }); expect(await count(`batch IS NULL`)).toBe(2);
+  });
+  it('one code at a time: void, restore, delete; a sold code cannot be restored or deleted', async () => {
+    await load('c1\nc2\nc3'); await order({ qty: 1 }); await reconcile(); const sold = (await rows(`SELECT seq FROM voucher_codes WHERE status = 'sold'`))[0].seq; const free = await seqOf('c3');
+    expect((await call(`/v1/m/vouchers/codes/${free}/void`, { json: {} })).status).toBe(200); expect((await rows(`SELECT status FROM voucher_codes WHERE seq = ?`, [free]))[0].status).toBe('void');
+    expect((await call(`/v1/m/vouchers/codes/${free}/restore`, { json: {} })).status).toBe(200); expect((await rows(`SELECT status FROM voucher_codes WHERE seq = ?`, [free]))[0].status).toBe('available');
+    expect((await call(`/v1/m/vouchers/codes/${free}`, { method: 'DELETE' })).status).toBe(200); expect(await count(`seq = ?`, [free])).toBe(0);
+    expect((await call(`/v1/m/vouchers/codes/${sold}`, { method: 'DELETE' })).status).toBe(409);
+    await call(`/v1/m/vouchers/codes/${sold}/void`, { json: {} }); expect((await call(`/v1/m/vouchers/codes/${sold}/restore`, { json: {} })).status).toBe(409);
+    expect((await call('/v1/m/vouchers/codes/99999', { method: 'DELETE' })).status).toBe(404);
+  });
+  it('managers can change codes, staff can only look', () => {
+    expect(roleCanRequest('manager', 'POST', '/v1/m/vouchers/batches').ok).toBe(true); expect(roleCanRequest('staff', 'POST', '/v1/m/vouchers/batches').ok).toBe(false);
+    expect(roleCanRequest('staff', 'DELETE', '/v1/m/vouchers/codes/3').ok).toBe(false); expect(roleCanRequest('staff', 'GET', '/v1/m/vouchers/batches').ok).toBe(true);
+    expect(roleCanRequest('staff', 'PUT', '/v1/m/vouchers/alerts/settings').ok).toBe(false);
+  });
+});
+
+describe('vouchers: low-code alerts', () => {
+  const settings = (json: Record<string, unknown>) => call('/v1/m/vouchers/alerts/settings', { method: 'PUT', json: { default_threshold: 10, emails: '', push: false, ...json } });
+  const levelOf = async () => (await j(await call('/v1/m/vouchers'))).items.find((x: any) => x.sku === sku);
+  beforeEach(async () => { await seedEmailConfig(db()); });
+
+  it('the plan list shows the threshold and level: ok, low, out, and out while paid orders wait', async () => {
+    await load(codes(12)); let p = await levelOf(); expect([p.threshold, p.level]).toEqual([10, 'ok']);
+    for (let i = 1; i <= 4; i++) await call(`/v1/m/vouchers/codes/${await seqOf('u' + i)}/void`, { json: {} });
+    expect((await levelOf()).level).toBe('low');   // 8 left
+    await call(`/v1/m/vouchers/alerts/plans/${sku}`, { method: 'PUT', json: { threshold: 5, muted: false } }); p = await levelOf(); expect([p.threshold, p.level]).toEqual([5, 'ok']);
+    await batchOp(sku, null, 'void'); expect((await levelOf()).level).toBe('out');
+    await batchOp(sku, null, 'restore'); await order({ qty: 12 }); await reconcile(); expect((await levelOf()).available).toBe(0);
+  });
+  it('a plan that never had a code is not an alarm (it is being set up)', async () => {
+    await settings({ emails: 'owner@shop.test', default_threshold: 5 }); await runVoucherCheck(db()); expect(mails().length).toBe(0); expect((await levelOf()).level).toBe('ok');
+  });
+  it('a plan with no code yet but a paid order waiting is an alarm', async () => {
+    await settings({ emails: 'owner@shop.test', default_threshold: 5 }); await order({ qty: 1 }); await reconcile();
+    expect((await levelOf()).level).toBe('out'); await runVoucherCheck(db()); expect(mails().length).toBe(1); expect(mails()[0].text).toMatch(/en attente/);
+  });
+  it('announces once when a plan gets low, once more when it runs out, and again only after it was refilled', async () => {
+    await settings({ emails: 'owner@shop.test', default_threshold: 3 }); await load(codes(5)); expect(mails().length).toBe(0);
+    const v = async (u: string) => call(`/v1/m/vouchers/codes/${await seqOf(u)}/void`, { json: {} }); const r = async (u: string) => call(`/v1/m/vouchers/codes/${await seqOf(u)}/restore`, { json: {} });
+    await v('u1'); expect(mails().length).toBe(0);                       // 4 left
+    await v('u2'); expect(mails().length).toBe(1);                       // 3 left: low
+    expect(mails()[0].to).toEqual(['owner@shop.test']); expect(mails()[0].text).toContain('3 code(s)');
+    await v('u3'); expect(mails().length).toBe(1);                       // 2 left: already announced
+    await v('u4'); await v('u5'); expect(mails().length).toBe(2);        // out: one more
+    await runVoucherCheck(db()); expect(mails().length).toBe(2);         // the 15-minute check does not repeat
+    for (const u of ['u1', 'u2', 'u3', 'u4', 'u5']) await r(u);          // refilled: re-armed, no message
+    expect(mails().length).toBe(2); expect((await rows(`SELECT COUNT(*) AS n FROM voucher_low_state`))[0].n).toBe(0);
+    await v('u1'); await v('u2'); expect(mails().length).toBe(3);        // drops again: announced again
+  });
+  it('a muted plan is never announced, and without e-mail addresses nothing is sent but the state is still kept', async () => {
+    await settings({ emails: 'owner@shop.test', default_threshold: 5 }); await call(`/v1/m/vouchers/alerts/plans/${sku}`, { method: 'PUT', json: { threshold: null, muted: true } });
+    await load(codes(3)); await runVoucherCheck(db()); expect(mails().length).toBe(0);
+    await call(`/v1/m/vouchers/alerts/plans/${sku}`, { method: 'PUT', json: { threshold: null, muted: false } }); expect(mails().length).toBe(1);   // unmuting announces what is already low
+    await settings({ emails: '', default_threshold: 5 }); await batchOp(sku, null, 'void'); expect(mails().length).toBe(1); expect((await rows(`SELECT level FROM voucher_low_state`))[0].level).toBe('out');
+  });
+  it('the message mentions paid orders still waiting for a code, and a payment triggers the check', async () => {
+    await settings({ emails: 'owner@shop.test', default_threshold: 0 }); await load(codes(1));
+    const id = await order({ paid: false, qty: 2 }); const [o] = await rows(`SELECT * FROM orders WHERE id = ?`, [id]);
+    await recordPayment(db(), o, { amount_cents: 2000, method: 'cash' } as any);   // takes the only code, one unit left waiting
+    expect(mails().length).toBe(1); expect(mails()[0].text).toMatch(/1 commande\(s\) payée\(s\) en attente/); expect(mails()[0].text).toMatch(/OUT/);
+  });
+  it('settings are checked and cleaned; a plan needs to be a voucher plan', async () => {
+    const r = await j(await settings({ emails: 'A@B.co, nonsense; a@b.co ,c@d.co', default_threshold: 7, push: true })); expect(r).toMatchObject({ default_threshold: 7, emails: 'a@b.co, c@d.co', push: 1 });
+    expect((await settings({ default_threshold: -1 })).status).toBe(400); expect((await settings({ default_threshold: 1.5 })).status).toBe(400);
+    expect((await call('/v1/m/vouchers/alerts/plans/NOPE', { method: 'PUT', json: { threshold: 3, muted: false } })).status).toBe(404);
+    expect((await call('/v1/m/vouchers/alerts/settings')).status).toBe(200);
   });
 });
 

@@ -2,6 +2,7 @@ import type { ModuleDef } from '../types';
 import { voucherAdmin } from './routes';
 import { voucherPublic } from './public';
 import { reconcile } from './lib';
+import { runVoucherCheck } from './alerts';
 
 // WiFi / access vouchers: you load the codes your hotspot already knows (from MikroTik User Manager, Mikhmon…),
 // link them to products, and each paid order (online, mobile money, cash at the counter) receives its code(s)
@@ -14,7 +15,7 @@ export const vouchers: ModuleDef = {
     fr: 'Vendez des codes d’accès (hotspot MikroTik, Mikhmon…) : chargez vos codes, liez-les à des produits, et chaque commande payée reçoit son code automatiquement, même en cas de vente au comptoir.',
     en: 'Sell access codes (MikroTik hotspot, Mikhmon…): load your codes, link them to products, and every paid order gets its code automatically, counter sales included.',
   },
-  version: 1,
+  version: 2,
   migrate: [
     // A plan is a product variant (its price, name and stock label live in the catalog) that is sold as a code.
     `CREATE TABLE IF NOT EXISTS voucher_plans (
@@ -49,9 +50,17 @@ export const vouchers: ModuleDef = {
      )`,
     `CREATE TABLE IF NOT EXISTS voucher_settings (id INTEGER PRIMARY KEY CHECK (id = 1), origin TEXT)`,
     `INSERT OR IGNORE INTO voucher_settings (id, origin) VALUES (1, NULL)`,
+    // Low-code alerts (version 2): per-plan threshold, what has already been announced, and the shared settings.
+    `CREATE TABLE IF NOT EXISTS voucher_low (sku TEXT PRIMARY KEY, threshold INTEGER, muted INTEGER NOT NULL DEFAULT 0)`,
+    `CREATE TABLE IF NOT EXISTS voucher_low_state (sku TEXT PRIMARY KEY, level TEXT NOT NULL CHECK (level IN ('low', 'out')), alerted_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS voucher_alert_settings (id INTEGER PRIMARY KEY CHECK (id = 1), default_threshold INTEGER NOT NULL DEFAULT 10, emails TEXT NOT NULL DEFAULT '', push INTEGER NOT NULL DEFAULT 1)`,
+    `INSERT OR IGNORE INTO voucher_alert_settings (id) VALUES (1)`,
   ],
   access: { manager: 'write', staff: 'read' },
-  hooks: { orderPaid: (db) => reconcile(db) },
+  hooks: {
+    orderPaid: async (db) => { await reconcile(db); await runVoucherCheck(db); },
+    scheduled: async (db, ctx) => { await runVoucherCheck(db, ctx.storeName); },
+  },
   routes: voucherAdmin,
   publicRoutes: voucherPublic,
 };

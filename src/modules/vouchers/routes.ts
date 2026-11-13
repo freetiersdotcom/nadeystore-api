@@ -5,6 +5,12 @@
 //   POST   /plans/:sku/codes          load codes { text, batch?, dry_run? } — checked in full first, all or nothing
 //   GET    /codes                     ?sku= &status= &q= (a code or part of one) &limit=
 //   POST   /codes/:seq/void           take an unsold code out of circulation (or flag a sold one as withdrawn)
+//   POST   /codes/:seq/restore        put a voided, never-sold code back on sale
+//   DELETE /codes/:seq                delete a code that was never sold (sold codes are kept as records)
+//   GET    /batches                   ?sku= the batches (one per loaded file) with how many codes are available / sold / voided
+//   POST   /batches                   { sku, batch|null, action: void|restore|delete|move|rename, to_sku?, new_name?, dry_run? } on the unsold codes of a batch
+//   GET    /alerts/settings           low-code alert settings;  PUT to change { default_threshold, emails, push }
+//   PUT    /alerts/plans/:sku         { threshold: number|null, muted: boolean } for one plan
 //   GET    /orders                    paid orders that contain vouchers, newest first
 //   GET    /orders/:orderId           one delivery (also hands out codes that are due)
 //   POST   /orders/:orderId/resend    e-mail the codes again
@@ -15,6 +21,8 @@ import { getDb } from '../../db';
 import { ApiError, now, type HonoEnv } from '../../types';
 import { audit } from '../../auth/service';
 import { deliveryOf, missingFor, parseCodes, reconcile, rememberOrigin, MAX_LINES } from './lib';
+import { applyBatch, listBatches } from './batches';
+import { getAlertSettings, parseEmails, planLevels, runVoucherCheck } from './alerts';
 
 const app = new Hono<HonoEnv>();
 const actor = (c: any) => { const a = c.get('auth'); return { actor_user_id: a.user?.id ?? null, actor: a.user?.email ?? 'api-key', ip: c.req.header('CF-Connecting-IP') ?? null }; };
@@ -23,6 +31,8 @@ async function body<T extends z.ZodTypeAny>(c: any, schema: T): Promise<z.infer<
   if (!r.success) throw ApiError.invalidRequest(r.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '));
   return r.data;
 }
+
+const storeName = (c: any): string => (c.env as any).STORE_NAME ?? 'Your Store';
 
 // Remember where this API lives (for the link in e-mails) whenever the admin uses the module.
 app.use('*', async (c, next) => { await rememberOrigin(getDb(c.var.db), new URL(c.req.url).origin); await next(); });
@@ -38,7 +48,8 @@ app.get('/', async (c) => {
             COALESCE((SELECT SUM(oi.qty - (SELECT COUNT(*) FROM voucher_codes c WHERE c.order_item_id = oi.id)) FROM order_items oi JOIN orders o ON o.id = oi.order_id
                        WHERE oi.sku = p.sku AND o.status NOT IN ('canceled', 'refunded') AND COALESCE(o.amount_paid_cents, 0) >= o.total_cents AND o.total_cents > 0), 0) AS waiting
        FROM voucher_plans p LEFT JOIN variants v ON v.sku = p.sku LEFT JOIN products pr ON pr.id = v.product_id ORDER BY pr.title, v.title`);
-  return c.json({ items: plans });
+  const lv = new Map((await planLevels(db)).map((x) => [x.sku, x]));
+  return c.json({ items: plans.map((p: any) => ({ ...p, threshold: lv.get(p.sku)?.threshold ?? null, level: lv.get(p.sku)?.level ?? 'ok', muted: lv.get(p.sku)?.muted ?? 0 })) });
 });
 
 app.put('/plans/:sku', async (c) => {
@@ -100,6 +111,7 @@ app.post('/plans/:sku/codes', async (c) => {
   const ts = now();
   for (const x of codes) await db.run(`INSERT INTO voucher_codes (sku, username, password, status, batch, created_at) VALUES (?, ?, ?, 'available', ?, ?)`, [sku, x.username, x.password, batchName || null, ts]);
   await reconcile(db);   // paid orders that were waiting are served now, in the order they were paid
+  await runVoucherCheck(db, storeName(c));
   await audit(db, { action: 'voucher.loaded', ...actor(c), target: sku, meta: { count: codes.length, batch: batchName ?? null, profile: b.profile ?? null } });
   return c.json({ ...report, added: codes.length });
 });
@@ -125,7 +137,68 @@ app.post('/codes/:seq/void', async (c) => {
   if (row.status === 'void') return c.json({ seq, status: 'void' });
   await db.run(`UPDATE voucher_codes SET status = 'void' WHERE seq = ?`, [seq]);
   await audit(db, { action: 'voucher.void', ...actor(c), target: row.username, meta: { was: row.status } });
+  await runVoucherCheck(db, storeName(c));
   return c.json({ seq, status: 'void' });
+});
+
+app.post('/codes/:seq/restore', async (c) => {
+  const db = getDb(c.var.db); const seq = parseInt(c.req.param('seq'), 10);
+  const [row] = await db.query<{ username: string; status: string; order_id: string | null }>(`SELECT username, status, order_id FROM voucher_codes WHERE seq = ?`, [seq]);
+  if (!row) throw ApiError.notFound('Code not found');
+  if (row.order_id) throw ApiError.conflict('This code was given to an order and cannot go back on sale.');
+  if (row.status === 'available') return c.json({ seq, status: 'available' });
+  await db.run(`UPDATE voucher_codes SET status = 'available' WHERE seq = ? AND order_id IS NULL`, [seq]);
+  await audit(db, { action: 'voucher.restore', ...actor(c), target: row.username });
+  await reconcile(db);
+  await runVoucherCheck(db, storeName(c));
+  return c.json({ seq, status: 'available' });
+});
+
+app.delete('/codes/:seq', async (c) => {
+  const db = getDb(c.var.db); const seq = parseInt(c.req.param('seq'), 10);
+  const [row] = await db.query<{ username: string; order_id: string | null; sold_at: string | null }>(`SELECT username, order_id, sold_at FROM voucher_codes WHERE seq = ?`, [seq]);
+  if (!row) throw ApiError.notFound('Code not found');
+  if (row.order_id || row.sold_at) throw ApiError.conflict('This code was given to an order: it is kept as a record. Void it instead.');
+  await db.run(`DELETE FROM voucher_codes WHERE seq = ? AND order_id IS NULL AND sold_at IS NULL`, [seq]);
+  await audit(db, { action: 'voucher.delete', ...actor(c), target: row.username });
+  await runVoucherCheck(db, storeName(c));
+  return c.json({ deleted: true });
+});
+
+app.get('/batches', async (c) => {
+  const sku = c.req.query('sku');
+  return c.json({ items: await listBatches(getDb(c.var.db), sku || undefined) });
+});
+
+app.post('/batches', async (c) => {
+  const b = await body(c, z.object({ sku: z.string().min(1).max(100), batch: z.string().max(80).nullable(), action: z.enum(['void', 'restore', 'delete', 'move', 'rename']), to_sku: z.string().max(100).optional(), new_name: z.string().max(80).optional(), dry_run: z.boolean().optional() }));
+  const db = getDb(c.var.db);
+  const r = await applyBatch(db, { ...b, batch: b.batch === '' ? null : b.batch });
+  if (!b.dry_run) {
+    await audit(db, { action: `voucher.batch_${b.action}`, ...actor(c), target: b.sku, meta: { batch: b.batch, to_sku: b.to_sku ?? null, affected: r.affected } });
+    await runVoucherCheck(db, storeName(c));
+  }
+  return c.json(r);
+});
+
+app.get('/alerts/settings', async (c) => c.json(await getAlertSettings(getDb(c.var.db))));
+
+app.put('/alerts/settings', async (c) => {
+  const b = await body(c, z.object({ default_threshold: z.number().int().min(0).max(100000), emails: z.string().max(500), push: z.boolean() }));
+  const db = getDb(c.var.db); const emails = parseEmails(b.emails).join(', ');
+  await db.run(`UPDATE voucher_alert_settings SET default_threshold = ?, emails = ?, push = ? WHERE id = 1`, [b.default_threshold, emails, b.push ? 1 : 0]);
+  await audit(db, { action: 'voucher.alert_settings', ...actor(c), target: 'vouchers' });
+  await runVoucherCheck(db, storeName(c));
+  return c.json(await getAlertSettings(db));
+});
+
+app.put('/alerts/plans/:sku', async (c) => {
+  const sku = c.req.param('sku'); const db = getDb(c.var.db);
+  const b = await body(c, z.object({ threshold: z.number().int().min(0).max(100000).nullable(), muted: z.boolean() }));
+  const [plan] = await db.query(`SELECT 1 FROM voucher_plans WHERE sku = ?`, [sku]); if (!plan) throw ApiError.notFound('Not a voucher plan');
+  await db.run(`INSERT INTO voucher_low (sku, threshold, muted) VALUES (?, ?, ?) ON CONFLICT(sku) DO UPDATE SET threshold = excluded.threshold, muted = excluded.muted`, [sku, b.threshold, b.muted ? 1 : 0]);
+  await runVoucherCheck(db, storeName(c));
+  return c.json({ sku, threshold: b.threshold, muted: b.muted });
 });
 
 app.get('/orders', async (c) => {
