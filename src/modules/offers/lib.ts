@@ -73,7 +73,7 @@ export async function matchOffers(db: Database, skus: string[], lang: 'fr' | 'en
 /**
  * Confirm the offers a cart took. Each accepted offer prices its cart line (the browser never decides the price).
  * Refused: the rule is off or gone, the line is missing, the quantity is above the rule's limit, the trigger is no longer in the cart,
- * the currency does not match, or the line was already re-priced by something else.
+ * or the line was already re-priced by something else.
  */
 export async function attach(db: Database, cartId: string, offerIds: string[]): Promise<{ attached: string[]; refused: string[] }> {
   const attached: string[] = []; const refused: string[] = [];
@@ -84,7 +84,7 @@ export async function attach(db: Database, cartId: string, offerIds: string[]): 
     const [o] = await db.query<Offer>(`SELECT * FROM offers WHERE id = ? AND active = 1`, [offerId]);
     const line = o && lines.find((l) => l.sku === o.offer_sku);
     const t = o && line ? await target(db, o.offer_sku) : null;
-    if (!o || !line || !t || line.qty > o.max_qty || (cart.currency && t.currency && cart.currency !== t.currency)) { refused.push(offerId); continue; }
+    if (!o || !line || !t || line.qty > o.max_qty) { refused.push(offerId); continue; }
     const others = await cartView(db, lines.filter((l) => l.sku !== o.offer_sku).map((l) => l.sku));
     const price = discounted(t.price_cents, o.discount_pct);
     if (!triggerMet(o, others) || (line.unit_price_cents !== t.price_cents && line.unit_price_cents !== price)) { refused.push(offerId); continue; }

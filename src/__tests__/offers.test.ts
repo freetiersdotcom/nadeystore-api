@@ -159,14 +159,17 @@ describe('confirming an offer at checkout (the shop sets the price)', () => {
     await call(`/v1/m/offers/${id}`, { method: 'PUT', json: rule({ trigger_kind: 'product', trigger_ref: await productOf(main.sku), max_qty: 2 }) });
     expect((await attach(c, [id])).attached).toEqual([id]); expect(await priceIn(c, offered.sku)).toBe(4000);
   });
-  it('refuses inactive or unknown rules, a closed cart, a currency mismatch, and a line re-priced by something else', async () => {
+  it('refuses inactive or unknown rules, a closed cart, and a line re-priced by something else', async () => {
     const id = await makeRule(); const c = await cart([{ sku: main.sku }, { sku: offered.sku }]);
     expect((await attach(c, ['00000000-0000-0000-0000-000000000000'])).refused).toHaveLength(1);
     await db().run(`UPDATE carts SET status = 'checked_out' WHERE id = ?`, [c]); expect((await attach(c, [id])).refused).toEqual([id]);
-    const c2 = await cart([{ sku: main.sku }, { sku: offered.sku }], 'XOF'); expect((await attach(c2, [id])).refused).toEqual([id]);
     const c3 = await cart([{ sku: main.sku }, { sku: offered.sku, price: 777 }]); expect((await attach(c3, [id])).refused).toEqual([id]); expect(await priceIn(c3, offered.sku)).toBe(777);
     await call(`/v1/m/offers/${id}`, { method: 'PUT', json: rule({ active: false }) });
     const c4 = await cart([{ sku: main.sku }, { sku: offered.sku }]); expect((await attach(c4, [id])).refused).toEqual([id]); expect(await priceIn(c4, offered.sku)).toBe(5000);
+  });
+  it('does not compare currencies: the store-wide currency rules (variant currency is a legacy label)', async () => {
+    const id = await makeRule(); const c = await cart([{ sku: main.sku }, { sku: offered.sku }], 'XOF');
+    expect((await attach(c, [id])).attached).toEqual([id]); expect(await priceIn(c, offered.sku)).toBe(4000);
   });
   it('an offer the cart dropped is forgotten', async () => {
     const id = await makeRule(); const c = await cart([{ sku: main.sku }, { sku: offered.sku }]);
