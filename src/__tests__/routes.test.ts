@@ -196,7 +196,7 @@ describe('Cart routes', () => {
       city:        'Cotonou',
       postal_code: '229',
       country:     'BJ',
-      phone:       '+22901610000',   // the courier calls this number, so it is required
+      phone:       '+2290161000000',   // the courier calls this number, so it is required
     }, publicKey);
     expect(res.status).toBe(200);
   });

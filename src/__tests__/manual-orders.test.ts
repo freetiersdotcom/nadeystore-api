@@ -19,7 +19,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
   const text = await res.text(); let json: any = null; try { json = JSON.parse(text); } catch { /* */ }
   return { status: res.status, json };
 }
-const COTONOU = { line1: '12 rue des Palmiers', city: 'Cotonou', country: 'BJ', phone: '+22961000000' };
+const COTONOU = { line1: '12 rue des Palmiers', city: 'Cotonou', country: 'BJ', phone: '+2290161000000' };
 
 beforeEach(async () => {
   const d = db();
