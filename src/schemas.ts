@@ -22,7 +22,7 @@ export const ErrorResponse = z.object({
   error: z.object({
     code: z.string().openapi({ example: 'invalid_request' }),
     message: z.string().openapi({ example: 'Invalid request parameters' }),
-    details: z.record(z.unknown()).optional(),
+    details: z.record(z.string(), z.unknown()).optional(),
   }),
 }).openapi('Error');
 
@@ -484,7 +484,7 @@ export const CustomerResponse = z.object({
     total_spent_cents: z.number().int(),
     last_order_at: z.string().datetime().nullable(),
   }),
-  metadata: z.record(z.unknown()).nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
 }).openapi('Customer');
@@ -520,7 +520,7 @@ export const UpdateCustomerBody = z.object({
   name: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   accepts_marketing: z.boolean().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 }).openapi('UpdateCustomer');
 
 export const CreateAddressBody = z.object({
@@ -668,7 +668,7 @@ export const UpdateWebhookBody = z.object({
 export const WebhookDeliveryResponse = z.object({
   id: z.string().uuid(),
   event_type: z.string(),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   status: z.enum(['pending', 'success', 'failed']),
   attempts: z.number().int(),
   response_code: z.number().int().nullable(),

@@ -163,7 +163,7 @@ const ConfigBody = z.object({
   buffer_min: z.number().int().min(0).max(480).default(0),
   step_min: z.number().int().min(5).max(480).default(30),
   default_duration_min: z.number().int().min(5).max(24 * 60).default(60),
-  durations: z.record(z.number().int().min(5).max(24 * 60)).default({}),
+  durations: z.record(z.string(), z.number().int().min(5).max(24 * 60)).default({}),
   resource_ids: z.array(z.string()).max(100).optional(),   // providers for this service; empty = all active ones
 });
 
