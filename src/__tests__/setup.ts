@@ -32,9 +32,21 @@ import {
 // Storage is automatically wiped between test files by the pool.
 
 export async function createTestDb() {
-  const id   = env.MERCHANT.newUniqueId();
-  const stub = env.MERCHANT.get(id) as any;
-  return getDb(stub);
+  // The app talks to the Durable Object named 'default', so the tests must use that same one
+  // (a fresh unique object would hold keys the app never sees, and every request would get a 401).
+  // It is shared by all tests of a file, so each call starts from empty tables.
+  const stub = env.MERCHANT.get(env.MERCHANT.idFromName('default')) as any;
+  const db = getDb(stub);
+  const tables = (await db.query<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'`
+  )).map((t) => t.name);
+  let left = tables;
+  for (let pass = 0; pass < 6 && left.length; pass++) {
+    const failed: string[] = [];
+    for (const t of left) { try { await db.run(`DELETE FROM "${t}"`); } catch { failed.push(t); } }
+    left = failed;
+  }
+  return db;
 }
 
 // ── Seed helpers ──────────────────────────────────────────────────────────────

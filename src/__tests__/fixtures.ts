@@ -212,7 +212,7 @@ export function fedaPayTransactionVerifyResponse(opts: {
   amount?: number;
 }): object {
   return {
-    v1_transaction: {
+    'v1/transaction': {
       id:               opts.txId   ?? 16851,
       klass:            'v1/transaction',
       reference:        'trx__hQ_test',
@@ -234,7 +234,7 @@ export function fedaPayTransactionVerifyResponse(opts: {
  */
 export function fedaPayCreateTransactionResponse(txId = 16851): object {
   return {
-    v1_transaction: {
+    'v1/transaction': {
       id:          txId,
       klass:       'v1/transaction',
       reference:   `trx__test_${txId}`,
@@ -263,7 +263,7 @@ export function fedaPayTokenResponse(txId = 16851): object {
  */
 export function fedaPayTransactionListResponse(): object {
   return {
-    v1_transactions: [],
+    'v1/transactions': [],
     meta: { page: 1, per_page: 1, total_count: 0 },
   };
 }

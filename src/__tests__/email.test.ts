@@ -42,7 +42,7 @@ describe('Resend adapter', () => {
     await provider.send({ to: 'buyer@test.com', subject: 'Test', html: '<p>Hello</p>' });
 
     expect(capturedUrl).toBe('https://api.resend.com/emails');
-    expect(capturedBody.to).toBe('buyer@test.com');
+    expect(capturedBody.to).toEqual(['buyer@test.com']);   // the provider takes a list of recipients
     expect(capturedBody.from).toBe(BASE_CONFIG.from_address);
     expect(capturedBody.subject).toBe('Test');
   });
@@ -185,7 +185,7 @@ describe('renderOrderConfirmation()', () => {
       }],
     });
     expect(html).toContain('abc123token');
-    expect(html).toContain('/v1/downloads/');
+    expect(html).toContain('/fr/telechargements/?token=abc123token');   // the link goes to the shop's download page
   });
 
   it('does not include download link for physical items', () => {

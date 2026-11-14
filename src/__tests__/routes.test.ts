@@ -25,6 +25,14 @@ import {
   mockFetch, MOCK_RESPONSES,
   makeRequest, signStripeWebhook, signFedaPayWebhook,
 } from './setup';
+import { stripeCheckoutCompletedEvent, fedaPayRawWebhookEvent } from './fixtures';
+
+// FedaPay webhook body in the shape the handler reads: { name, entity: { id, ... } }.
+// (fedaPayRawWebhookEvent in fixtures.ts is the CLI event-log shape: type + entity as a string.)
+function fedaPayWebhookBody(opts: { cartId: string; txId?: number; eventType?: string; status?: string; amount?: number }): string {
+  const raw = JSON.parse(fedaPayRawWebhookEvent(opts));
+  return JSON.stringify({ name: raw.type, object: 'event', entity: { ...JSON.parse(raw.entity), custom_metadata: { cart_id: opts.cartId } } });
+}
 
 // ── Helper: fetch via SELF with auth ─────────────────────────────────────────
 
@@ -87,7 +95,7 @@ describe('Catalog routes', () => {
 
   it('POST /v1/products creates a product', async () => {
     const res  = await api('/v1/products', 'POST', { title: 'My Product' }, adminKey);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.id).toBeTruthy();
     expect(body.title).toBe('My Product');
@@ -109,7 +117,7 @@ describe('Catalog routes', () => {
       weight_g:     0,
       product_type: 'digital',
     }, adminKey);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.product_type).toBe('digital');
     expect(body.digital_asset_key).toBeNull();
@@ -153,8 +161,8 @@ describe('Cart routes', () => {
     }, adminKey)).json() as any;
     testSku = variant.sku;
 
-    await api('/v1/inventory', 'POST',
-      { sku: testSku, quantity: 10, reason: 'restock' }, adminKey);
+    await api(`/v1/inventory/${testSku}/adjust`, 'POST',
+      { delta: 10, reason: 'restock' }, adminKey);
   });
 
   it('POST /v1/carts creates a cart', async () => {
@@ -188,6 +196,7 @@ describe('Cart routes', () => {
       city:        'Cotonou',
       postal_code: '229',
       country:     'BJ',
+      phone:       '+22901610000',   // the courier calls this number, so it is required
     }, publicKey);
     expect(res.status).toBe(200);
   });
@@ -230,7 +239,7 @@ describe('Setup routes', () => {
 
   it('POST /v1/setup/fedapay validates key via FedaPay API', async () => {
     restore = mockFetch((url) => {
-      if (url.includes('fedapay')) return MOCK_RESPONSES.fedaPayTransactions();
+      if (url.includes('fedapay')) return MOCK_RESPONSES.fedaPayTransactionList();
       return new Response('not found', { status: 404 });
     });
 
@@ -243,7 +252,7 @@ describe('Setup routes', () => {
   });
 
   it('GET /v1/setup/fedapay returns status without secrets', async () => {
-    restore = mockFetch(() => MOCK_RESPONSES.fedaPayTransactions());
+    restore = mockFetch(() => MOCK_RESPONSES.fedaPayTransactionList());
 
     await api('/v1/setup/fedapay', 'POST', {
       secret_key: 'sk_sandbox_valid', webhook_secret: 'wh_test', sandbox: true,
@@ -431,7 +440,7 @@ describe('POST /v1/webhooks/fedapay', () => {
     expect(res.status).toBe(400);
   });
 
-  it('creates order for valid transaction.approved event (real payload format)', async () => {
+  it('creates order for valid transaction.approved event (payload as the handler reads it)', async () => {
     restore = mockFetch((url) => {
       if (url.includes('fedapay') && url.includes('/transactions/')) {
         return MOCK_RESPONSES.fedaPayVerify('approved');
@@ -441,7 +450,7 @@ describe('POST /v1/webhooks/fedapay', () => {
     });
 
     // Use the real FedaPay raw webhook format
-    const payload = fedaPayRawWebhookEvent({
+    const payload = fedaPayWebhookBody({
       cartId:    cartId,
       txId:      42,
       eventType: 'transaction.approved',
@@ -463,12 +472,13 @@ describe('POST /v1/webhooks/fedapay', () => {
     expect(orders.length).toBeGreaterThan(0);
   });
 
-  it('deduplicates by FedaPay event ID (not transaction ID)', async () => {
-    restore = mockFetch(() => MOCK_RESPONSES.outboundWebhook());
+  it('deduplicates by event type + transaction ID (FedaPay sends no stable event ID)', async () => {
+    restore = mockFetch((url) => url.includes('/transactions/')
+      ? MOCK_RESPONSES.fedaPayVerify('approved', 99)
+      : MOCK_RESPONSES.outboundWebhook());
 
-    const eventId = 'AXVA3Z99XcBqjxRq9dZr';  // fixed event ID
-    const makePayload = () => fedaPayRawWebhookEvent({
-      cartId: cartId, txId: 99, eventId, eventType: 'transaction.approved',
+    const makePayload = () => fedaPayWebhookBody({
+      cartId: cartId, txId: 99, eventType: 'transaction.approved',
     });
 
     const payload1 = makePayload();
@@ -490,7 +500,7 @@ describe('POST /v1/webhooks/fedapay', () => {
 
     const events = await db.query<any>(
       `SELECT * FROM events WHERE stripe_event_id = ?`,
-      [`fedapay_evt_${eventId}`]
+      ['fedapay_evt_transaction.approved_99']
     );
     expect(events).toHaveLength(1);
   });
@@ -509,13 +519,15 @@ describe('GET /v1/downloads/:token', () => {
     orderId = uuid();
     sku     = 'DIG-DL-001';
 
-    await db.run(`INSERT INTO products (id, title) VALUES (?, 'Digital Product')`, [uuid()]);
+    const pid = uuid();
+    await db.run(`INSERT INTO products (id, title) VALUES (?, 'Digital Product')`, [pid]);
     const vid = uuid();
     await db.run(
       `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, product_type, digital_asset_key)
        VALUES (?, ?, ?, 'Digital', 999, 0, 'digital', 'assets/test-file.pdf')`,
-      [vid, vid, sku]
+      [vid, pid, sku]
     );
+    await (env as any).IMAGES.put('assets/test-file.pdf', 'hello file');
     await db.run(
       `INSERT INTO orders (id, number, status, customer_email, subtotal_cents,
        tax_cents, shipping_cents, total_cents, currency)
@@ -524,15 +536,15 @@ describe('GET /v1/downloads/:token', () => {
     );
   });
 
-  it('redirects to asset URL for valid token', async () => {
+  it('streams the file for a valid token and counts the download', async () => {
     const token = await seedDownloadToken(db, orderId, sku);
-    const res   = await SELF.fetch(
-      new Request(`http://localhost/v1/downloads/${token}`, { redirect: 'manual' })
-    );
-    // 302 redirect to the asset URL
-    expect(res.status).toBe(302);
-    const location = res.headers.get('Location');
-    expect(location).toBeTruthy();
+    const res   = await SELF.fetch(new Request(`http://localhost/v1/downloads/${token}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Disposition')).toContain('test-file.pdf');
+    expect(await res.text()).toBe('hello file');
+    expect(Number(res.headers.get('X-Downloads-Remaining'))).toBeGreaterThanOrEqual(0);
+    const [row] = await db.query<any>(`SELECT download_count FROM download_tokens`);
+    expect(row.download_count).toBe(1);
   });
 
   it('returns JSON info when Accept: application/json', async () => {
@@ -544,6 +556,8 @@ describe('GET /v1/downloads/:token', () => {
     const body = await res.json() as any;
     expect(body.sku).toBe(sku);
     expect(body.downloads_remaining).toBeGreaterThan(0);
+    const [row] = await db.query<any>(`SELECT download_count FROM download_tokens`);
+    expect(row.download_count).toBe(0);   // looking at the info does not use up a download
   });
 
   it('returns 404 for unknown token', async () => {
@@ -595,12 +609,14 @@ describe('Migrations', () => {
 
   it('variants table has product_type and digital_asset_key columns', async () => {
     const db = await createTestDb();
+    const pid = uuid();
+    await db.run(`INSERT INTO products (id, title) VALUES (?, 'Digital Test Product')`, [pid]);
 
     // Should be able to insert with these columns
     await expect(db.run(
       `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, product_type)
        VALUES (?, ?, ?, ?, 1000, 0, 'digital')`,
-      [uuid(), uuid(), `TEST-${uuid().slice(0, 4)}`, 'Digital Test']
+      [uuid(), pid, `TEST-${uuid().slice(0, 4)}`, 'Digital Test']
     )).resolves.toBeDefined();
   });
 

@@ -29,6 +29,7 @@ import {
 } from '../lib/downloads';
 import { verifyFedaPaySignature, createFedaPayCheckout } from '../lib/fedapay';
 import { getEmailProvider } from '../lib/email/index';
+import { fedaPayTokenResponse, fedaPayCreateTransactionResponse } from './fixtures';
 
 // ── prepareCheckout ───────────────────────────────────────────────────────────
 
@@ -348,13 +349,25 @@ describe('createOrderFromCart()', () => {
     expect(usage.discount_amount_cents).toBe(300);
   });
 
-  it('skips already-processed cart (expired status)', async () => {
+  it('records a late payment on an auto-expired cart as an order that needs review', async () => {
     const { sku } = await seedProduct(db, { price_cents: 1000, on_hand: 5 });
     const cartId  = await seedCart(db, [{ sku, qty: 1, price_cents: 1000 }]);
     await db.run(`UPDATE carts SET status = 'expired' WHERE id = ?`, [cartId]);
 
     const result = await createOrderFromCart(db, doStub, fakeCtx, cartId, orderCtx);
-    expect(result).toBeNull();
+    expect(result?.needsReview).toBe(true);   // the money arrived, so the order exists, but stock must be checked by a person
+    const [order] = await db.query<any>(`SELECT needs_review FROM orders WHERE id = ?`, [result!.orderId]);
+    expect(order.needs_review).toBe(1);
+  });
+
+  it('skips a cart that already has an order (the double-processing guard)', async () => {
+    const { sku } = await seedProduct(db, { price_cents: 1000, on_hand: 5 });
+    const cartId  = await seedCart(db, [{ sku, qty: 1, price_cents: 1000 }]);
+    await db.run(`UPDATE carts SET status = 'checked_out' WHERE id = ?`, [cartId]);
+
+    expect(await createOrderFromCart(db, doStub, fakeCtx, cartId, orderCtx)).not.toBeNull();
+    expect(await createOrderFromCart(db, doStub, fakeCtx, cartId, orderCtx)).toBeNull();
+    expect(await db.query(`SELECT id FROM orders WHERE cart_id = ?`, [cartId])).toHaveLength(1);
   });
 
   it('marks cart expired after order creation', async () => {
@@ -401,12 +414,12 @@ describe('download token utilities', () => {
     orderId = uuid();
     sku     = 'DIG-001';
 
-    await db.run(`INSERT INTO products (id, title) VALUES (?, 'Digital')`, [uuid()]);
     const pid = uuid();
+    await db.run(`INSERT INTO products (id, title) VALUES (?, 'Digital')`, [pid]);
     await db.run(
       `INSERT INTO variants (id, product_id, sku, title, price_cents, weight_g, product_type)
        VALUES (?, ?, ?, 'Digital', 1000, 0, 'digital')`,
-      [pid, pid, sku]
+      [uuid(), pid, sku]
     );
     await db.run(
       `INSERT INTO orders (id, number, status, customer_email, subtotal_cents,
@@ -543,6 +556,7 @@ describe('createFedaPayCheckout()', () => {
   it('calls FedaPay API in correct order and returns checkout URL', async () => {
     const calls: string[] = [];
     restore = mockFetch((url) => {
+       calls.push(url);
        if (url.includes('/token')) return new Response(JSON.stringify(fedaPayTokenResponse()), { status: 200 });
        return new Response(JSON.stringify(fedaPayCreateTransactionResponse(99)), { status: 200 });
     });
@@ -558,18 +572,18 @@ describe('createFedaPayCheckout()', () => {
     });
 
     expect(result.transaction_id).toBe(99);
-    expect(result.checkout_url).toContain('checkout.fedapay.com');
+    expect(result.checkout_url).toContain('fedapay.com/checkout');   // sandbox host, taken from the token response
     expect(calls[0]).toContain('sandbox-api.fedapay.com/v1/transactions');
-    expect(calls[1]).toContain('/token');
+    expect(calls[1]).toContain('/v1/transactions/99/token');
   });
 
-  it('sends merchant_reference as cartId', async () => {
+  it('sends amount, currency and customer to FedaPay (the cart is linked by the caller, via the transaction id)', async () => {
     let capturedBody = '';
     restore = mockFetch((url, init) => {
       if (!url.includes('/token')) capturedBody = init?.body as string;
       return url.includes('/token')
         ? MOCK_RESPONSES.fedaPayToken()
-        : MOCK_RESPONSES.fedaPayCreate();
+        : MOCK_RESPONSES.fedaPayCreateTransaction();
     });
 
     await createFedaPayCheckout({
@@ -580,8 +594,13 @@ describe('createFedaPayCheckout()', () => {
       config: { secret_key: 'sk', webhook_secret: 'wh', sandbox: true },
     });
 
+    // The cart id is not sent to FedaPay: the checkout code stores transaction id -> cart id itself,
+    // and the webhook finds the cart through that mapping.
     const body = JSON.parse(capturedBody);
-    expect(body.merchant_reference).toBe('my_cart_id');
+    expect(body.amount).toBe(1000);
+    expect(body.currency).toEqual({ iso: 'XOF' });
+    expect(body.customer).toEqual({ email: 'a@b.com' });
+    expect(body.callback_url).toBe('https://store.com/ok');
   });
 });
 
