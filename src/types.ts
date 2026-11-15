@@ -38,6 +38,9 @@ export type Env = {
   CONTACT_NOTIFY_EMAIL?: string;  // optional: also email each message to this address
 };
 
+/** All the code needs from an execution context is `waitUntil`: Hono's `c.executionCtx` and the Workers one both satisfy it. */
+export type WaitUntilCtx = Pick<ExecutionContext, 'waitUntil'>;
+
 export type DOStub = {
   query: <T = unknown>(sql: string, params: unknown[]) => Promise<T[]>;
   run: (sql: string, params: unknown[]) => Promise<{ changes: number }>;

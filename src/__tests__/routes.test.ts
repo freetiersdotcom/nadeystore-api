@@ -329,7 +329,7 @@ describe('POST /v1/webhooks/stripe', () => {
 
   it('deduplicates events with same stripe_event_id', async () => {
     restore = mockFetch((url) => {
-      if (url.includes('stripe.com')) return MOCK_RESPONSES.stripeRetrieve();
+      if (url.includes('stripe.com')) return MOCK_RESPONSES.stripeSessionRetrieve('cart_unused');
       return MOCK_RESPONSES.outboundWebhook();
     });
 
@@ -438,6 +438,18 @@ describe('POST /v1/webhooks/fedapay', () => {
       body: '{}',
     }));
     expect(res.status).toBe(400);
+  });
+
+  it('answers 400 (not 500) to a correctly signed body that is not a JSON object', async () => {
+    for (const body of ['null', '42', '"text"']) {
+      const sig = await signFedaPayWebhook(body, WEBHOOK_SECRET);
+      const res = await SELF.fetch(new Request('http://localhost/v1/webhooks/fedapay', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'x-fedapay-signature': sig },
+        body,
+      }));
+      expect(res.status, `body ${body}`).toBe(400);
+    }
   });
 
   it('creates order for valid transaction.approved event (payload as the handler reads it)', async () => {

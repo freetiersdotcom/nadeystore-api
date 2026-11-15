@@ -1,5 +1,5 @@
 import type { Database } from '../db';
-import type { DOStub } from '../types';
+import type { DOStub, WaitUntilCtx } from '../types';
 import { uuid, now } from '../types';
 import { getEmailProvider } from './email/index';
 import { fmtMoney, fmtDate, payUrl, renderPlanEmail, type PlanEmailKind } from './email/planNotice';
@@ -248,7 +248,7 @@ export async function startCharge(
  * toward an existing order, or nothing = a normal whole-cart checkout) and acts.
  */
 export async function settleCharge(
-  db: Database, stub: DOStub, ctx: ExecutionContext, cartId: string,
+  db: Database, stub: DOStub, ctx: WaitUntilCtx, cartId: string,
   provider: string, ref: string, orderCtx: OrderContext
 ) {
   let intent: { kind: string | null; amount_cents: number | null; order_id: string | null } | undefined;

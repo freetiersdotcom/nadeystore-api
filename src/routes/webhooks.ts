@@ -115,31 +115,6 @@ webhooks.post('/stripe', async (c) => {
 });
 
 // Raw format as POSTed by FedaPay to the webhook endpoint
-interface FedaPayRawEvent {
-  klass:     string;           // "v1/event"
-  id:        string;           // FedaPay event ID (for deduplication)
-  type:      string;           // "transaction.approved" | "transaction.declined" etc.
-  entity:    string;           // stringified JSON of the transaction object
-  object_id: number;           // transaction numeric ID
-}
-
-// Shape of the parsed entity string
-interface FedaPayTransaction {
-  id:               number;
-  reference:        string;    // merchant_reference = cartId
-  amount:           number;
-  status:           string;
-  description:      string;
-  custom_metadata?: Record<string, string> | null;
-  currency_id?:     number;    // currency is a foreign key in the raw format
-  metadata?:        Record<string, unknown>;
-  // Note: currency ISO is NOT in entity — only currency_id.
-  // Use verifyFedaPayTransaction() to get the ISO code if needed,
-  // or read it from the cart (cart.currency) which is more reliable.
-}
-
-// POST /v1/webhooks/fedapay — CORRECTED
-// Raw format as POSTed by FedaPay to the webhook endpoint
 interface FedaPayTransaction {
   id:               number;
   reference:        string | null;
@@ -148,6 +123,7 @@ interface FedaPayTransaction {
   description:      string;
   custom_metadata?: Record<string, string> | null;
   currency?:        { iso: string } | null;
+  currency_id?:     number;    // the ISO code is not always in the entity: read it from the cart (cart.currency) or verifyFedaPayTransaction()
   metadata?:        Record<string, unknown>;
 }
 
@@ -185,6 +161,8 @@ webhooks.post('/fedapay', async (c) => {
   } catch {
     throw ApiError.invalidRequest('Invalid JSON payload');
   }
+  // `null`, a number or a string are valid JSON but not an event: answer 400 instead of crashing on `rawEvent.name`
+  if (!rawEvent || typeof rawEvent !== 'object') throw ApiError.invalidRequest('Invalid JSON payload');
 
   const eventType = rawEvent.name;
   const tx        = rawEvent.entity ?? null;

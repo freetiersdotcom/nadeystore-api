@@ -7,7 +7,7 @@ import type { Database } from '../db';
 import { getDb } from '../db';
 import { roleCan, isRole, type Permission } from '../auth/permissions';
 import { openConfig, sealConfig } from './config-secrets';
-import { uuid, now, type DOStub, type Env } from '../types';
+import { uuid, now, type DOStub, type Env, type WaitUntilCtx } from '../types';
 
 const enc = new TextEncoder();
 const b64u = (b: ArrayBuffer | Uint8Array) => {
@@ -152,7 +152,7 @@ export async function pushAdmins(db: Database, e: PushEvent): Promise<void> {
 }
 
 /** Tell every subscribed person who may see this kind of thing. Never throws and never delays the caller (runs after the response). */
-export function notifyAdmins(stub: DOStub, ctx: ExecutionContext, e: PushEvent): void {
+export function notifyAdmins(stub: DOStub, ctx: WaitUntilCtx, e: PushEvent): void {
   const work = pushAdmins(getDb(stub), e).catch((err) => console.error('[push] failed', err));
   try { ctx.waitUntil(work); } catch { /* no execution context (tests calling directly) */ }
 }

@@ -1,5 +1,5 @@
 import { getDb, type Database } from '../db';
-import { uuid, now, type DOStub } from '../types';
+import { uuid, now, type DOStub, type WaitUntilCtx } from '../types';
 
 export type WebhookEventType =
   | 'order.created'
@@ -46,7 +46,7 @@ export function generateWebhookSecret(): string {
 
 export async function dispatchWebhooks(
   stub: DOStub,
-  ctx: ExecutionContext,
+  ctx: WaitUntilCtx,
   eventType: WebhookEventType,
   data: Record<string, unknown>
 ): Promise<void> {
@@ -183,7 +183,7 @@ export async function retryDelivery(
 
 export async function checkLowInventory(
   stub: DOStub,
-  ctx: ExecutionContext,
+  ctx: WaitUntilCtx,
   sku: string,
   available: number
 ): Promise<void> {
@@ -196,7 +196,7 @@ export async function checkLowInventory(
   }
 }
 
-export async function retryFailedDeliveries(stub: DOStub, ctx: ExecutionContext): Promise<number> {
+export async function retryFailedDeliveries(stub: DOStub, ctx: WaitUntilCtx): Promise<number> {
   const db = getDb(stub);
 
   const failed = await db.query<{

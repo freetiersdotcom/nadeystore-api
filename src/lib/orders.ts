@@ -26,7 +26,7 @@ import { runOrderPaidHooks } from '../modules/registry';
 import { notifyAdmins } from './push';
 import { isUndeliverable } from './walk-in';
 import type { Database } from '../db';
-import type { DOStub } from '../types';
+import type { DOStub, WaitUntilCtx } from '../types';
 import { uuid, now, generateOrderNumber } from '../types';
 import { createDownloadTokens } from './downloads';
 import { getEmailProvider } from './email/index';
@@ -68,7 +68,7 @@ export interface OrderContext {
 export async function createOrderFromCart(
   db:      Database,
   doStub:  DOStub,
-  ctx:     ExecutionContext,
+  ctx:     WaitUntilCtx,
   cartId:  string,
   ctx_order: OrderContext
 ): Promise<OrderResult | null> {

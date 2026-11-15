@@ -15,7 +15,7 @@ import type { Database } from '../db';
 export type AccessLevel = 'read' | 'write';
 
 /** What the 15-minute cron gives a module. `stub` and `exec` let it create orders (they are only missing in tests that do not need them). */
-export type ScheduledCtx = { storeBaseUrl: string; storeName: string; stub?: import('../types').DOStub; exec?: ExecutionContext };
+export type ScheduledCtx = { storeBaseUrl: string; storeName: string; stub?: import('../types').DOStub; exec?: import('../types').WaitUntilCtx };
 
 export type ModuleDef = {
   /** Lower-case id, used in URLs: /v1/m/<id>/… (admin API) and /m/<id>/… (public pages). */

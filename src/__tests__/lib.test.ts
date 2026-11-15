@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { env } from 'cloudflare:test';
 import { getDb } from '../db';
-import { uuid, now } from '../types';
+import { uuid, now, type WaitUntilCtx } from '../types';
 import {
   createTestDb, seedApiKeys, seedProduct, seedCart,
   seedStripeConfig, seedFedaPayConfig, seedEmailConfig,
@@ -213,10 +213,7 @@ describe('createOrderFromCart()', () => {
 
   afterEach(() => restore());
 
-  const fakeCtx = {
-    waitUntil: (p: Promise<any>) => p,
-    passThroughOnException: () => {},
-  } as ExecutionContext;
+  const fakeCtx: WaitUntilCtx = { waitUntil: (p: Promise<any>) => { void p; } };
 
   const orderCtx = {
     provider:     'test',

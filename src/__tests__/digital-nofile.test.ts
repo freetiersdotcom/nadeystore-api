@@ -3,6 +3,7 @@
 // =============================================================================
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
+import type { WaitUntilCtx } from '../types';
 import { getDb } from '../db';
 import { mockFetch, MOCK_RESPONSES, seedApiKeys, seedProduct, seedCart, seedEmailConfig } from './setup';
 import { createOrderFromCart } from '../lib/orders';
@@ -26,7 +27,7 @@ beforeEach(async () => {
 });
 afterEach(() => restore());
 
-const fakeCtx = { waitUntil: (p: Promise<any>) => p, passThroughOnException: () => {} } as ExecutionContext;
+const fakeCtx: WaitUntilCtx = { waitUntil: (p: Promise<any>) => { void p; } };
 const orderCtx = { provider: 'test', providerRef: 'ref_1', storeBaseUrl: 'https://teststore.com', storeName: 'Test Store' };
 async function checkout(items: { sku: string; qty: number; price_cents: number }[]) {
   const stub = env.MERCHANT.get(env.MERCHANT.idFromName('default')); const d = getDb(stub as any);

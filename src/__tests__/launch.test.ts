@@ -94,7 +94,7 @@ describe('launch: manual items and access', () => {
     expect((await get()).manual.find((x: any) => x.id === 'mail_dns').done).toBe(false);
     expect((await call('/v1/launch/manual/nope', { json: { done: true } })).status).toBe(404);
     expect((await call('/v1/launch/manual/mail_dns', { json: { done: 'yes' } })).status).toBe(400);
-    expect((await db().query(`SELECT COUNT(*) n FROM audit_log WHERE action = 'launch.manual'`))[0].n).toBe(2);
+    expect((await db().query<{ n: number }>(`SELECT COUNT(*) n FROM audit_log WHERE action = 'launch.manual'`))[0].n).toBe(2);
   });
   it('ready only when every must-have is green and every required manual item is ticked', async () => {
     const p = await seedProduct(db()); await db().run(`UPDATE products SET image_url = 'https://assets.teststore.com/a.jpg', description_fr = 'x' WHERE id = ?`, [p.productId]);

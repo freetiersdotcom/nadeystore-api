@@ -10,6 +10,7 @@
 //   - sign helpers      generate valid webhook signatures for tests
 // =============================================================================
 
+import { vi } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
 import { MerchantDO } from '../do';
 import { getDb } from '../db';
