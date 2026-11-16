@@ -38,11 +38,20 @@ async function init() {
   const publicId = crypto.randomUUID();
   const adminId = crypto.randomUUID();
 
+  const setupToken = process.env.SETUP_TOKEN;
+  if (!setupToken) {
+    console.error('SETUP_TOKEN is not set. The API refuses /v1/setup/init without it.\n'
+      + '  Local:   put SETUP_TOKEN=some-long-secret in .dev.vars, restart "npm run dev", then run:\n'
+      + '           SETUP_TOKEN=some-long-secret npx tsx scripts/init.ts\n'
+      + '  Remote:  wrangler secret put SETUP_TOKEN, then SETUP_TOKEN=... MERCHANT_URL=... npx tsx scripts/init.ts --remote');
+    process.exit(1);
+  }
+
   console.log('🔑 Creating API keys via /v1/setup/init...');
   
   const response = await fetch(`${baseUrl}/v1/setup/init`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Setup-Token': setupToken },
     body: JSON.stringify({
       keys: [
         { id: publicId, key_hash: publicHash, key_prefix: 'pk_', role: 'public' },

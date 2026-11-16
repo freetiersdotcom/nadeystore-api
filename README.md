@@ -11,8 +11,8 @@ A lightweight, API-first backend for products, inventory, checkout, and ordersâ€
 git clone https://github.com/ygwyg/merchant
 cd merchant && npm install
 
-# 2. Initialize (creates API keys)
-npx tsx scripts/init.ts
+# 2. Initialize (creates API keys). The API needs a one-time secret: put SETUP_TOKEN=... in .dev.vars first.
+SETUP_TOKEN=the-same-secret npx tsx scripts/init.ts
 
 # 3. Start the API
 npm run dev

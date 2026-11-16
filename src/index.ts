@@ -67,6 +67,19 @@ app.use('*', async (c, next) => {
 
 app.use('/v1/*', rateLimitMiddleware());
 
+// A request refused by a route schema comes out of the router as { success: false, error: ZodError } (and with Zod 4 the issues
+// are inside a JSON string). Answer in the API's usual shape instead: { error: { code, message, details } }.
+app.use('/v1/*', async (c, next) => {
+  await next();
+  if (c.res.status !== 400 || !(c.res.headers.get('content-type') ?? '').includes('application/json')) return;
+  const body = (await c.res.clone().json().catch(() => null)) as { success?: boolean; error?: { name?: string; message?: string; issues?: unknown } } | null;
+  if (body?.success !== false || body.error?.name !== 'ZodError') return;
+  let issues: { path?: (string | number)[]; message?: string }[] = Array.isArray(body.error.issues) ? (body.error.issues as typeof issues) : [];
+  if (!issues.length) { try { const parsed = JSON.parse(body.error.message ?? '[]'); if (Array.isArray(parsed)) issues = parsed; } catch { /* not JSON */ } }
+  const message = issues.length ? issues.map((i) => `${i.path?.length ? i.path.join('.') : 'body'}: ${i.message}`).join('; ') : 'Invalid request';
+  c.res = c.json({ error: { code: 'invalid_request', message, details: { issues } } }, 400);
+});
+
 app.onError((err, c) => {
   console.error(err);
 
