@@ -37,6 +37,7 @@ import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
 import { backupRoutes } from './routes/backup';
 import { importApp, exportApp } from './routes/bulk';
+import { currencyApp } from './routes/currency';
 import { pushApp } from './routes/push';
 import { moduleAdmin } from './routes/modules';
 import { authMiddleware } from './middleware/auth';
@@ -121,6 +122,7 @@ app.route('/v1/downloads', downloads);
 
 // Mount asset upload under the catalog products path
 app.route('/v1/catalog/products', assetRoutes);
+app.route('/v1/catalog/currency', currencyApp);
 
 app.route('/v1/submissions', submissions);
 app.route('/v1/backup', backupRoutes);
