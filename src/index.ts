@@ -37,6 +37,9 @@ import { assetRoutes } from './routes/assets';
 import { submissions } from './routes/submissions';
 import { backupRoutes } from './routes/backup';
 import { importApp, exportApp } from './routes/bulk';
+import { tierAdmin } from './routes/tier';
+import { brandingRoutes } from './routes/branding';
+import { assertFeature, type Feature } from './lib/tiers';
 import { currencyApp } from './routes/currency';
 import { pushApp } from './routes/push';
 import { moduleAdmin } from './routes/modules';
@@ -66,6 +69,19 @@ app.use('*', async (c, next) => {
 });
 
 app.use('/v1/*', rateLimitMiddleware());
+
+// Admin areas a tier can leave out (see lib/tiers.ts). A customer using a discount code at checkout goes through /v1/carts and is never blocked.
+const FEATURE_PATHS: Array<[RegExp, Feature]> = [
+  [/^\/v1\/discounts(\/|$)/, 'discounts'],
+  [/^\/v1\/(import|export)(\/|$)/, 'import_export'],
+  [/^\/v1\/(profit|costs)(\/|$)/, 'profit'],
+  [/^\/v1\/backup(\/|$)/, 'backup'],
+];
+app.use('/v1/*', async (c, next) => {
+  const hit = FEATURE_PATHS.find(([re]) => re.test(c.req.path));
+  if (hit) await assertFeature(getDb(c.var.db as DOStub), hit[1]);
+  await next();
+});
 
 // A request refused by a route schema comes out of the router as { success: false, error: ZodError } (and with Zod 4 the issues
 // are inside a JSON string). Answer in the API's usual shape instead: { error: { code, message, details } }.
@@ -145,6 +161,8 @@ app.route('/v1/profit', profitRoutes);
 app.route('/v1/costs', costRoutes);
 // Optional modules (see modules/MODULES.md). Admin routes live at /v1/m/<id>, public pages at /m/<id>.
 app.route('/v1/modules', moduleAdmin);
+app.route('/v1', tierAdmin); // PUT /v1/tier (agency), GET /v1/capabilities
+app.route('/v1/branding', brandingRoutes);
 app.use('/v1/push/*', authMiddleware);
 app.route('/v1/push', pushApp);
 app.use('/v1/m/*', authMiddleware);

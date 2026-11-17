@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from '@hono/zod-openapi';
 import { getDb, type Database } from '../db';
+import { assertStaffRoom } from '../lib/tiers';
 import { ApiError, isValidEmail, type HonoEnv } from '../types';
 import { authMiddleware, requirePermission } from '../middleware/auth';
 import { getEmailProvider } from '../lib/email/index';
@@ -429,6 +430,7 @@ authRoutes.post('/users', authMiddleware, requirePermission('users.manage'), asy
   if (b.role === 'agency' && !isAgencyLevel(auth)) throw ApiError.forbidden('Only the agency can create an agency account');
   const db = getDb(c.var.db);
   if (await getUserByEmail(db, b.email)) throw ApiError.conflict('A user with this email already exists');
+  if (b.role === 'manager' || b.role === 'staff') await assertStaffRoom(db);
   const user = await createUser(db, { email: b.email, name: b.name ?? null, role: b.role, locale: b.locale ?? null, createdBy: auth.user?.id ?? 'api-key' });
   await audit(db, { action: 'user.created', actor_user_id: auth.user?.id, actor: auth.user?.email ?? 'api-key', target: user.email, ip: clientIp(c), meta: { role: user.role } });
   const invite = await inviteUser(c, db, user, b.locale);

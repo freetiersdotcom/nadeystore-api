@@ -9,6 +9,7 @@ import { audit } from '../auth/service';
 import { ApiError, type HonoEnv } from '../types';
 import { MODULES, getModule, readState, setEnabled } from '../modules/registry';
 import { isSuperRole } from '../auth/permissions';
+import { getPlan, moduleAllowed, tierError } from '../lib/tiers';
 
 const app = new Hono<HonoEnv>();
 app.use('*', authMiddleware);
@@ -16,11 +17,12 @@ app.use('*', authMiddleware);
 app.get('/', async (c) => {
   const db = getDb(c.var.db);
   const { enabled } = await readState(db);
+  const plan = await getPlan(db);
   const role = c.get('auth').user?.role;
   return c.json({
     items: MODULES.map((m) => {
       const lvl = !role || isSuperRole(role) ? 'write' : (m.access as Record<string, string | undefined>)[role];
-      return { id: m.id, name: m.name, description: m.description, version: m.version, enabled: enabled.includes(m.id), access: lvl ?? null };
+      return { id: m.id, name: m.name, description: m.description, version: m.version, enabled: enabled.includes(m.id) && moduleAllowed(plan, m.id), allowed: moduleAllowed(plan, m.id), access: lvl ?? null };
     }),
   });
 });
@@ -31,6 +33,7 @@ app.put('/:id', async (c) => {
   const body = z.object({ enabled: z.boolean() }).safeParse(await c.req.json().catch(() => null));
   if (!body.success) throw ApiError.invalidRequest('Body must be { "enabled": true | false }');
   const db = getDb(c.var.db);
+  if (body.data.enabled && !moduleAllowed(await getPlan(db), m.id)) throw tierError(`The ${m.name} module is not included in this plan. Ask your provider to upgrade.`, { module: m.id });
   await setEnabled(db, m, body.data.enabled);
   const a = c.get('auth');
   await audit(db, { action: body.data.enabled ? 'module.enabled' : 'module.disabled', actor_user_id: a.user?.id ?? null, actor: a.user?.email ?? 'api-key', target: m.id, ip: c.req.header('CF-Connecting-IP') ?? null });

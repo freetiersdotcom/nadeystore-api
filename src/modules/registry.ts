@@ -1,5 +1,6 @@
 import type { Database } from '../db';
 import type { ModuleDef, ScheduledCtx } from './types';
+import { getPlan, moduleAllowed } from '../lib/tiers';
 import { registerModuleAccess } from '../auth/permissions';
 import { quotes } from './quotes';
 import { affiliates } from './affiliates';
@@ -44,16 +45,17 @@ export async function ensureInstalled(db: Database, m: ModuleDef, state?: State)
 export async function runOrderPaidHooks(db: Database): Promise<void> {
   try {
     const s = await readState(db);
+    const plan = await getPlan(db);
     for (const id of s.enabled) {
       const m = getModule(id);
-      if (!m?.hooks?.orderPaid) continue;
+      if (!m?.hooks?.orderPaid || !moduleAllowed(plan, id)) continue;
       try { await ensureInstalled(db, m, s); await m.hooks.orderPaid(db); } catch (e) { console.error(`[modules] ${id} orderPaid hook failed`, e); }
     }
   } catch (e) { console.error('[modules] hooks failed', e); }
 }
 
 export async function isEnabled(db: Database, id: string): Promise<boolean> {
-  return (await readState(db)).enabled.includes(id);
+  return (await readState(db)).enabled.includes(id) && moduleAllowed(await getPlan(db), id);
 }
 
 /** Switch a module on (creating its tables) or off (data is kept, routes close). */
@@ -69,8 +71,9 @@ export async function setEnabled(db: Database, m: ModuleDef, enabled: boolean): 
 export async function runScheduledHooks(db: Database, ctx: ScheduledCtx): Promise<void> {
   try {
     const s = await readState(db);
+    const plan = await getPlan(db);
     for (const id of s.enabled) {
-      const m = getModule(id); if (!m?.hooks?.scheduled) continue;
+      const m = getModule(id); if (!m?.hooks?.scheduled || !moduleAllowed(plan, id)) continue;
       try { await ensureInstalled(db, m, s); await m.hooks.scheduled(db, ctx); } catch (e) { console.error(`[modules] ${id} scheduled hook failed`, e); }
     }
   } catch (e) { console.error('[modules] scheduled hooks failed', e); }

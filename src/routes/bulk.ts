@@ -10,6 +10,7 @@ import { authMiddleware } from '../middleware/auth';
 import { audit } from '../auth/service';
 import { ApiError, type HonoEnv } from '../types';
 import { requestSiteRebuild } from '../lib/rebuild';
+import { tierImportErrors } from '../lib/tiers';
 import { getShippingSettings } from '../lib/shipping';
 import { applyProductImport, exportCustomersCsv, exportOrdersCsv, exportProductsCsv, planProductImport } from '../lib/bulk';
 
@@ -46,6 +47,7 @@ importApp.post('/products', async (c) => {
   const currency = await currencyOf(c, db);
 
   const plan = await planProductImport(db, text, currency);
+  if (!plan.errors.length) plan.errors.push(...(await tierImportErrors(db, plan.ops)));
   const report = { dry_run: dryRun, currency, ok: plan.errors.length === 0, summary: plan.summary, errors: plan.errors.slice(0, 100), error_count: plan.errors.length, warnings: plan.warnings.slice(0, 50) };
   if (!report.ok) return c.json({ ...report, applied: false }, dryRun ? 200 : 422);
   if (dryRun) return c.json({ ...report, applied: false });

@@ -122,6 +122,7 @@ const RULES: Rule[] = [
   // Cost prices and profit: owner and manager only (staff never see what the shop pays)
   { match: /^\/v1\/(profit|costs)(\/|$)/, permission: 'costs.manage' },
   { match: /^\/v1\/modules(\/|$)/, permission: 'settings.manage' },
+  { match: /^\/v1\/branding$/, methods: ['PUT'], permission: 'settings.manage' },
   // CSV import / export
   { match: /^\/v1\/import\/products(\/|$)/, permission: 'products.write' },
   { match: /^\/v1\/export\/products\.csv$/, permission: 'products.read' },
@@ -157,7 +158,7 @@ export function roleCanRequest(role: Role, method: string, path: string): { ok: 
   // Notifications belong to the signed-in person, whatever their role (the route refuses API keys).
   if (/^\/v1\/push(\/|$)/.test(path)) return { ok: true, needed: null };
   // The module list is read by everyone signed in (the menu needs it); switching modules is a setting.
-  if (method.toUpperCase() === 'GET' && /^\/v1\/modules\/?$/.test(path)) return { ok: true, needed: null };
+  if (method.toUpperCase() === 'GET' && /^\/v1\/(modules|capabilities)\/?$/.test(path)) return { ok: true, needed: null };
   const needed = requiredPermission(method, path);
   if (!needed) return { ok: isSuperRole(role), needed };
   return { ok: roleCan(role, needed), needed };

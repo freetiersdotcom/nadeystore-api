@@ -4,6 +4,7 @@ import { getDb } from '../db';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ApiError, uuid, now, type HonoEnv } from '../types';
 import { requestSiteRebuild } from '../lib/rebuild';
+import { assertSells, assertProductRoom } from '../lib/tiers';
 import {
   IdParam,
   ProductResponse,
@@ -232,6 +233,7 @@ const createProduct = createRoute({
 app.openapi(createProduct, async (c) => {
   const { title, description, slug, description_fr, description_en, tags, video_url } = c.req.valid('json');
   const db = getDb(c.var.db);
+  await assertProductRoom(db);
 
   const id = uuid();
   const timestamp = now();
@@ -457,6 +459,7 @@ app.openapi(createVariant, async (c) => {
   const { id: productId } = c.req.valid('param');
   const { sku, title, price_cents, image_url, product_type, weight_g, currency: cur } = c.req.valid('json');
   const db = getDb(c.var.db);
+  await assertSells(db, product_type);
   // Same currency as the rest of the shop unless told otherwise (the column default is USD).
   const [firstVar] = await db.query<{ currency: string }>(`SELECT currency FROM variants WHERE sku <> 'CUSTOM' ORDER BY created_at LIMIT 1`);
   const currency = (cur ?? firstVar?.currency ?? 'USD').toUpperCase();
@@ -552,6 +555,7 @@ app.openapi(updateVariant, async (c) => {
   }
 
   if (body.product_type !== undefined) {
+    await assertSells(db, body.product_type);
     updates.push('product_type = ?');
     params.push(body.product_type);
   }
