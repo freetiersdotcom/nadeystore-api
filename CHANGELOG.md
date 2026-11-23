@@ -1,6 +1,24 @@
 # Changelog
 
-## 0.2.0 (2025-01-11)
+Notes for people who merge this template into a client's repository: each entry says what changed and whether it needs anything beyond a merge
+(a new variable, a new secret, a manual step). Newest first. Add an entry for every change that reaches clients.
+
+## Unreleased
+
+- Template repository, named Boutik. Add your next change here.
+
+## 1.0.0 (baseline)
+
+Everything in this repository at the time the template was cut: the Boutik platform as first deployed for the pilot client.
+It started as the `merchant` project (history below) and added accounts and roles, credentials and key rotation, FedaPay and Stripe, email providers,
+plans and tiers, optional modules, backups and restore, the launch checklist, and the plan and branding endpoints used by the storefront and admin.
+
+---
+
+## History of the upstream `merchant` project
+
+
+### 0.2.0 (2025-01-11)
 
 This release is a significant architecture overhaul focused on performance, real-time capabilities, and agent interoperability.
 
